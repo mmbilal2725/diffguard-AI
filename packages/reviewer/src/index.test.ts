@@ -1,10 +1,256 @@
 import { describe, expect, it } from "vitest";
 
-import { isPostableFinding } from "./index.js";
+import type {
+  DiffGuardGitHubClient,
+  PullRequestFile,
+  PullRequestMetadata,
+} from "@diffguard/github";
 
-describe("isPostableFinding", () => {
-  it("only allows high-confidence findings to be posted", () => {
-    expect(isPostableFinding({ confidence: 0.9 })).toBe(true);
-    expect(isPostableFinding({ confidence: 0.69 })).toBe(false);
+import {
+  buildReviewContext,
+  runReviewPipeline,
+  type LlmReviewer,
+  type ReviewPipelineGitHubClient,
+} from "./index.js";
+
+const pullRequest: PullRequestMetadata = {
+  additions: 12,
+  authorLogin: "octocat",
+  baseRef: "main",
+  baseSha: "base-sha",
+  changedFiles: 1,
+  deletions: 2,
+  draft: false,
+  headRef: "feature",
+  headSha: "head-sha",
+  htmlUrl: "https://github.com/acme/widgets/pull/42",
+  id: 123,
+  number: 42,
+  state: "open",
+  title: "Fix widget totals",
+};
+
+const changedFile: PullRequestFile = {
+  additions: 12,
+  changes: 14,
+  deletions: 2,
+  filename: "src/widgets.ts",
+  patch: "@@ -10,6 +10,7 @@\n+return total;",
+  sha: "file-sha",
+  status: "modified",
+};
+
+describe("review pipeline", () => {
+  it("builds review context from pull request metadata, changed files, and rules", () => {
+    const context = buildReviewContext({
+      dryRun: true,
+      files: [changedFile],
+      owner: "acme",
+      pullNumber: 42,
+      pullRequest,
+      repo: "widgets",
+      rules: "Only comment when confidence is high.",
+    });
+
+    expect(context.ref).toEqual({ owner: "acme", repo: "widgets", number: 42 });
+    expect(context.pullRequest.headSha).toBe("head-sha");
+    expect(context.files).toHaveLength(1);
+    expect(context.rules).toEqual({
+      content: "Only comment when confidence is high.",
+      found: true,
+      path: ".diffguard-rules.md",
+    });
+    expect(context.dryRun).toBe(true);
+  });
+
+  it("does not fail when .diffguard-rules.md is missing", async () => {
+    const github = createGitHubClientDouble({ rules: null });
+
+    const result = await runReviewPipeline({
+      github: { client: github },
+      owner: "acme",
+      pullNumber: 42,
+      repo: "widgets",
+    });
+
+    expect(result.context.rules).toEqual({
+      content: null,
+      found: false,
+      path: ".diffguard-rules.md",
+    });
+    expect(result.findings).toEqual([]);
+  });
+
+  it("handles pull requests without changed files", async () => {
+    const github = createGitHubClientDouble({ files: [] });
+
+    const result = await runReviewPipeline({
+      github: { client: github },
+      owner: "acme",
+      pullNumber: 42,
+      repo: "widgets",
+    });
+
+    expect(result.context.files).toEqual([]);
+    expect(result.findings).toEqual([]);
+  });
+
+  it("dedupes findings by file path, line, category, and normalized title", async () => {
+    const github = createGitHubClientDouble();
+    const llmReviewer: LlmReviewer = async () => [
+      createFinding({ title: "Missing authorization check!" }),
+      createFinding({ title: " missing   authorization check " }),
+    ];
+
+    const result = await runReviewPipeline({
+      github: { client: github },
+      llmReviewer,
+      owner: "acme",
+      pullNumber: 42,
+      repo: "widgets",
+    });
+
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]?.title).toBe("Missing authorization check!");
+    expect(result.rejectedFindings).toContainEqual({
+      reason: "duplicate",
+      title: " missing   authorization check ",
+    });
+  });
+
+  it("filters findings below the confidence threshold", async () => {
+    const github = createGitHubClientDouble();
+    const llmReviewer: LlmReviewer = async () => [
+      createFinding({ confidence: 0.69, title: "Unclear issue below threshold" }),
+      createFinding({ confidence: 0.91, title: "Admin route misses authorization" }),
+    ];
+
+    const result = await runReviewPipeline({
+      github: { client: github },
+      llmReviewer,
+      owner: "acme",
+      pullNumber: 42,
+      repo: "widgets",
+    });
+
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]?.title).toBe("Admin route misses authorization");
+    expect(result.rejectedFindings).toContainEqual({
+      reason: "low_confidence",
+      title: "Unclear issue below threshold",
+    });
+  });
+
+  it("rejects style-only findings", async () => {
+    const github = createGitHubClientDouble();
+    const llmReviewer: LlmReviewer = async () => [
+      createFinding({
+        category: "style_only",
+        confidence: 0.99,
+        summary: "This comment only asks to rename a variable and does not describe a real bug.",
+        title: "Rename variable for readability",
+      }),
+    ];
+
+    const result = await runReviewPipeline({
+      github: { client: github },
+      llmReviewer,
+      owner: "acme",
+      pullNumber: 42,
+      repo: "widgets",
+    });
+
+    expect(result.findings).toEqual([]);
+    expect(result.rejectedFindings).toContainEqual({
+      reason: "style_only",
+      title: "Rename variable for readability",
+    });
+  });
+
+  it("returns a successful ReviewResult with validated findings and stage timings", async () => {
+    const github = createGitHubClientDouble();
+    const llmReviewer: LlmReviewer = async () => [
+      createFinding({
+        category: "authorization",
+        confidence: 0.96,
+        severity: "critical",
+        summary: "The admin route returns customer data before requireAdmin() is called.",
+        title: "Admin route misses authorization",
+      }),
+    ];
+
+    const result = await runReviewPipeline({
+      dryRun: true,
+      github: { client: github },
+      llmReviewer,
+      owner: "acme",
+      pullNumber: 42,
+      repo: "widgets",
+    });
+
+    expect(result).toMatchObject({
+      dryRun: true,
+      findings: [
+        {
+          category: "authorization",
+          confidence: 0.96,
+          severity: "critical",
+          title: "Admin route misses authorization",
+        },
+      ],
+      pullRequest: {
+        number: 42,
+        title: "Fix widget totals",
+      },
+    });
+    expect(result.timings.map((timing) => timing.stage)).toEqual([
+      "fetch_pull_request",
+      "list_changed_files",
+      "read_rules",
+      "build_context",
+      "static_checks",
+      "llm_review",
+      "validate_findings",
+      "dedupe_findings",
+      "filter_findings",
+    ]);
+    expect(result.timings.every((timing) => timing.durationMs >= 0)).toBe(true);
   });
 });
+
+function createGitHubClientDouble(
+  input: {
+    files?: PullRequestFile[];
+    rules?: string | null;
+  } = {},
+): ReviewPipelineGitHubClient {
+  const files = input.files ?? [changedFile];
+  const rules = input.rules === undefined ? "Only comment when confidence is high." : input.rules;
+
+  return {
+    getPullRequestMetadata: async () => ({ ok: true, data: pullRequest }),
+    listPullRequestFiles: async () => ({ ok: true, data: files }),
+    readDiffGuardRules: async () => ({ ok: true, data: rules }),
+  } satisfies Pick<
+    DiffGuardGitHubClient,
+    "getPullRequestMetadata" | "listPullRequestFiles" | "readDiffGuardRules"
+  >;
+}
+
+function createFinding(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    category: "authorization",
+    confidence: 0.93,
+    evidence: "The changed route returns customer data before requireAdmin() runs.",
+    filePath: "src/widgets.ts",
+    line: 12,
+    relatedRuleIds: ["repo-rule-admin-auth"],
+    severity: "high",
+    side: "RIGHT",
+    summary: "The changed route returns customer data before requireAdmin() runs.",
+    suggestedFix: "Call requireAdmin() before loading customer records.",
+    whyItMatters: "Users without admin privileges could read private customer data.",
+    title: "Missing authorization check",
+    ...overrides,
+  };
+}

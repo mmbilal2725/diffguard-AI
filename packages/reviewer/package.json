@@ -12,7 +12,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@diffguard/shared": "workspace:*"
+    "@diffguard/github": "workspace:*",
+    "@diffguard/shared": "workspace:*",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "typescript": "^5.7.3",

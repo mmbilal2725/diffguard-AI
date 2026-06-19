@@ -3,40 +3,38 @@ import { z } from "zod";
 export const FindingSeveritySchema = z.enum(["low", "medium", "high", "critical"]);
 
 export const FindingCategorySchema = z.enum([
-  "logic_bug",
-  "security_vulnerability",
-  "broken_api_contract",
-  "missing_authorization",
-  "unsafe_database_change",
-  "missing_error_handling",
-  "regression_risk",
-  "performance_problem",
-  "missing_test"
+  "logic",
+  "security",
+  "performance",
+  "reliability",
+  "regression",
+  "testing",
+  "data-loss",
+  "api-contract",
+  "authorization",
+  "validation",
 ]);
 
-export const FindingLocationSchema = z
-  .object({
-    path: z.string().min(1),
-    startLine: z.number().int().positive(),
-    endLine: z.number().int().positive().optional()
-  })
-  .refine((location) => location.endLine === undefined || location.endLine >= location.startLine, {
-    message: "endLine must be greater than or equal to startLine",
-    path: ["endLine"]
-  });
+export const ReviewFindingSideSchema = z.enum(["LEFT", "RIGHT"]);
 
-export const ReviewFindingSchema = z.object({
-  title: z.string().min(8).max(160),
-  body: z.string().min(20).max(4000),
-  category: FindingCategorySchema,
-  severity: FindingSeveritySchema,
-  confidence: z.number().min(0.7).max(1),
-  location: FindingLocationSchema,
-  suggestedFix: z.string().min(1).max(2000).optional(),
-  ruleIds: z.array(z.string().min(1)).default([])
-});
+export const ReviewFindingSchema = z
+  .object({
+    title: z.string().min(8).max(160),
+    category: FindingCategorySchema,
+    severity: FindingSeveritySchema,
+    confidence: z.number().min(0.7).max(1),
+    filePath: z.string().min(1),
+    line: z.number().int().positive(),
+    side: ReviewFindingSideSchema,
+    summary: z.string().min(20).max(2000),
+    evidence: z.string().min(20).max(3000),
+    suggestedFix: z.string().min(1).max(2000),
+    whyItMatters: z.string().min(20).max(2000),
+    relatedRuleIds: z.array(z.string().min(1)).default([]),
+  })
+  .strict();
 
 export type FindingSeverity = z.infer<typeof FindingSeveritySchema>;
 export type FindingCategory = z.infer<typeof FindingCategorySchema>;
-export type FindingLocation = z.infer<typeof FindingLocationSchema>;
+export type ReviewFindingSide = z.infer<typeof ReviewFindingSideSchema>;
 export type ReviewFinding = z.infer<typeof ReviewFindingSchema>;

@@ -1,12 +1,12 @@
 export {
   FindingCategorySchema,
-  FindingLocationSchema,
   FindingSeveritySchema,
-  ReviewFindingSchema
+  ReviewFindingSchema,
+  ReviewFindingSideSchema,
 } from "./review-finding.js";
 export type {
   FindingCategory,
-  FindingLocation,
   FindingSeverity,
-  ReviewFinding
+  ReviewFinding,
+  ReviewFindingSide,
 } from "./review-finding.js";

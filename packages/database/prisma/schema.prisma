@@ -29,15 +29,21 @@ enum FindingSeverity {
 }
 
 enum FindingCategory {
-  LOGIC_BUG
-  SECURITY_VULNERABILITY
-  BROKEN_API_CONTRACT
-  MISSING_AUTHORIZATION
-  UNSAFE_DATABASE_CHANGE
-  MISSING_ERROR_HANDLING
-  REGRESSION_RISK
-  PERFORMANCE_PROBLEM
-  MISSING_TEST
+  LOGIC         @map("logic")
+  SECURITY      @map("security")
+  PERFORMANCE   @map("performance")
+  RELIABILITY   @map("reliability")
+  REGRESSION    @map("regression")
+  TESTING       @map("testing")
+  DATA_LOSS     @map("data-loss")
+  API_CONTRACT  @map("api-contract")
+  AUTHORIZATION @map("authorization")
+  VALIDATION    @map("validation")
+}
+
+enum FindingSide {
+  LEFT
+  RIGHT
 }
 
 enum FindingStatus {
@@ -95,24 +101,24 @@ model PullRequest {
 }
 
 model ReviewRun {
-  id                       String          @id @default(cuid())
-  pullRequestId            String
-  status                   ReviewRunStatus @default(QUEUED)
-  startedAt                DateTime?
-  completedAt              DateTime?
-  findingsDetected         Int             @default(0)
-  findingsPosted           Int             @default(0)
-  validatorRejectionRate   Decimal?        @db.Decimal(5, 4)
-  estimatedFalsePositives  Int             @default(0)
-  resolvedFindings         Int             @default(0)
-  totalCostUsd             Decimal         @default(0) @db.Decimal(12, 6)
-  latencyMs                Int?
-  createdAt                DateTime        @default(now())
-  updatedAt                DateTime        @updatedAt
-  pullRequest              PullRequest     @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
-  findings                 Finding[]
-  modelCalls               ModelCall[]
-  feedbackEvents           FeedbackEvent[]
+  id                      String          @id @default(cuid())
+  pullRequestId           String
+  status                  ReviewRunStatus @default(QUEUED)
+  startedAt               DateTime?
+  completedAt             DateTime?
+  findingsDetected        Int             @default(0)
+  findingsPosted          Int             @default(0)
+  validatorRejectionRate  Decimal?        @db.Decimal(5, 4)
+  estimatedFalsePositives Int             @default(0)
+  resolvedFindings        Int             @default(0)
+  totalCostUsd            Decimal         @default(0) @db.Decimal(12, 6)
+  latencyMs               Int?
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
+  pullRequest             PullRequest     @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
+  findings                Finding[]
+  modelCalls              ModelCall[]
+  feedbackEvents          FeedbackEvent[]
 
   @@index([pullRequestId, status])
   @@index([createdAt])
@@ -123,14 +129,17 @@ model Finding {
   reviewRunId     String
   dedupeKey       String
   title           String
-  body            String
+  summary         String
+  evidence        String
   category        FindingCategory
   severity        FindingSeverity
   confidence      Decimal         @db.Decimal(3, 2)
   filePath        String
-  startLine       Int
-  endLine         Int?
+  line            Int
+  side            FindingSide     @default(RIGHT)
   suggestedFix    String?
+  whyItMatters    String
+  relatedRuleIds  String[]        @default([])
   status          FindingStatus   @default(VALIDATED)
   githubCommentId String?
   createdAt       DateTime        @default(now())
@@ -144,20 +153,20 @@ model Finding {
 }
 
 model ModelCall {
-  id               String          @id @default(cuid())
-  reviewRunId      String
-  provider         String
-  modelName        String
-  promptVersion    String
-  inputTokens      Int             @default(0)
-  outputTokens     Int             @default(0)
-  totalTokens      Int             @default(0)
-  costUsd          Decimal         @default(0) @db.Decimal(12, 6)
-  latencyMs        Int
-  status           ModelCallStatus
-  errorCode        String?
-  createdAt        DateTime        @default(now())
-  reviewRun        ReviewRun       @relation(fields: [reviewRunId], references: [id], onDelete: Cascade)
+  id            String          @id @default(cuid())
+  reviewRunId   String
+  provider      String
+  modelName     String
+  promptVersion String
+  inputTokens   Int             @default(0)
+  outputTokens  Int             @default(0)
+  totalTokens   Int             @default(0)
+  costUsd       Decimal         @default(0) @db.Decimal(12, 6)
+  latencyMs     Int
+  status        ModelCallStatus
+  errorCode     String?
+  createdAt     DateTime        @default(now())
+  reviewRun     ReviewRun       @relation(fields: [reviewRunId], references: [id], onDelete: Cascade)
 
   @@index([reviewRunId])
   @@index([modelName, promptVersion])
