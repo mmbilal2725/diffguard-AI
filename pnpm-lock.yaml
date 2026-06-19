@@ -55,6 +55,37 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.19.21)
 
+  apps/cli:
+    dependencies:
+      '@diffguard/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@diffguard/github':
+        specifier: workspace:*
+        version: link:../../packages/github
+      '@diffguard/reviewer':
+        specifier: workspace:*
+        version: link:../../packages/reviewer
+      '@diffguard/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.7
+        version: 22.19.21
+      tsx:
+        specifier: ^4.19.2
+        version: 4.22.4
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.21)
+
   apps/web:
     dependencies:
       '@radix-ui/react-slot':

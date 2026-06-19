@@ -1,0 +1,28 @@
+{
+  "name": "@diffguard/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "diffguard-ai": "./bin/diffguard-ai.js"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@diffguard/database": "workspace:*",
+    "@diffguard/github": "workspace:*",
+    "@diffguard/reviewer": "workspace:*",
+    "@diffguard/shared": "workspace:*",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

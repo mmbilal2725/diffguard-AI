@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "diffguard-ai": "./apps/cli/bin/diffguard-ai.js"
+  },
   "engines": {
     "node": ">=20.0.0"
   },

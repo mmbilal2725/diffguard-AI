@@ -19,6 +19,7 @@ This repository is the initial TypeScript/pnpm monorepo foundation. It does not 
 
 - `apps/web`: dashboard
 - `apps/api`: webhook receiver and API foundation
+- `apps/cli`: `diffguard-ai review` command entrypoint
 - `apps/worker`: background review worker foundation
 - `packages/github`: GitHub API wrapper boundary
 - `packages/reviewer`: review pipeline orchestration boundary
@@ -53,6 +54,16 @@ pnpm lint
 pnpm typecheck
 pnpm test
 ```
+
+## GitHub Action and CLI
+
+Run a pull request review from the CLI:
+
+```bash
+pnpm --filter @diffguard/cli start -- review --owner OWNER --repo REPO --pull-number PR_NUMBER --github-token "$GITHUB_TOKEN"
+```
+
+See [docs/github-action.md](docs/github-action.md) for the reusable GitHub Action workflow and installation guide.
 
 The API exposes:
 

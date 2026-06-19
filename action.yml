@@ -1,0 +1,94 @@
+name: DiffGuard-AI Review
+description: Run DiffGuard-AI against a GitHub pull request and post one summary comment.
+
+inputs:
+  owner:
+    description: Repository owner. Defaults to the owner from github.repository.
+    required: false
+  repo:
+    description: Repository name. Defaults to the name from github.repository.
+    required: false
+  pull-number:
+    description: Pull request number. Defaults to github.event.pull_request.number.
+    required: false
+  github-token:
+    description: GitHub token with pull-requests:write permission. Defaults to GITHUB_TOKEN from the workflow environment.
+    required: false
+  dry-run:
+    description: Run the review without posting a pull request comment.
+    required: false
+    default: "false"
+  min-confidence:
+    description: Minimum confidence required before a finding is included.
+    required: false
+    default: "0.7"
+  max-findings:
+    description: Maximum number of findings to include in the summary.
+    required: false
+  model:
+    description: Model name to use for the review pipeline.
+    required: false
+  output:
+    description: CLI output format, either markdown or json.
+    required: false
+    default: markdown
+
+runs:
+  using: composite
+  steps:
+    - name: Install DiffGuard-AI dependencies
+      shell: bash
+      run: |
+        corepack enable
+        pnpm install --frozen-lockfile --dir "$GITHUB_ACTION_PATH"
+
+    - name: Run DiffGuard-AI review
+      shell: bash
+      env:
+        DIFFGUARD_INPUT_OWNER: ${{ inputs.owner }}
+        DIFFGUARD_INPUT_REPO: ${{ inputs.repo }}
+        DIFFGUARD_INPUT_PULL_NUMBER: ${{ inputs.pull-number }}
+        DIFFGUARD_INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
+        DIFFGUARD_INPUT_DRY_RUN: ${{ inputs.dry-run }}
+        DIFFGUARD_INPUT_MIN_CONFIDENCE: ${{ inputs.min-confidence }}
+        DIFFGUARD_INPUT_MAX_FINDINGS: ${{ inputs.max-findings }}
+        DIFFGUARD_INPUT_MODEL: ${{ inputs.model }}
+        DIFFGUARD_INPUT_OUTPUT: ${{ inputs.output }}
+        DIFFGUARD_EVENT_PULL_NUMBER: ${{ github.event.pull_request.number }}
+        DIFFGUARD_REPOSITORY: ${{ github.repository }}
+      run: |
+        owner="${DIFFGUARD_INPUT_OWNER:-${DIFFGUARD_REPOSITORY%%/*}}"
+        repo="${DIFFGUARD_INPUT_REPO:-${DIFFGUARD_REPOSITORY#*/}}"
+        pull_number="${DIFFGUARD_INPUT_PULL_NUMBER:-$DIFFGUARD_EVENT_PULL_NUMBER}"
+
+        if [ -z "$pull_number" ]; then
+          echo "::error::DiffGuard-AI needs a pull request number. Set pull-number when not running on a pull_request event."
+          exit 1
+        fi
+
+        args=(
+          review
+          --owner "$owner"
+          --repo "$repo"
+          --pull-number "$pull_number"
+          --min-confidence "$DIFFGUARD_INPUT_MIN_CONFIDENCE"
+          --output "$DIFFGUARD_INPUT_OUTPUT"
+        )
+
+        if [ -n "$DIFFGUARD_INPUT_GITHUB_TOKEN" ]; then
+          args+=(--github-token "$DIFFGUARD_INPUT_GITHUB_TOKEN")
+        fi
+
+        if [ "$DIFFGUARD_INPUT_DRY_RUN" = "true" ]; then
+          args+=(--dry-run)
+        fi
+
+        if [ -n "$DIFFGUARD_INPUT_MAX_FINDINGS" ]; then
+          args+=(--max-findings "$DIFFGUARD_INPUT_MAX_FINDINGS")
+        fi
+
+        if [ -n "$DIFFGUARD_INPUT_MODEL" ]; then
+          args+=(--model "$DIFFGUARD_INPUT_MODEL")
+        fi
+
+        pnpm --dir "$GITHUB_ACTION_PATH" --filter @diffguard/cli start -- "${args[@]}"
