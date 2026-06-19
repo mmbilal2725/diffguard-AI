@@ -19,12 +19,12 @@ This repository is the initial TypeScript/pnpm monorepo foundation. It does not 
 
 - `apps/web`: dashboard
 - `apps/api`: webhook receiver and API foundation
-- `apps/cli`: `diffguard-ai review` command entrypoint
+- `apps/cli`: `diffguard-ai review` and `diffguard-ai eval run` command entrypoints
 - `apps/worker`: background review worker foundation
 - `packages/github`: GitHub API wrapper boundary
 - `packages/reviewer`: review pipeline orchestration boundary
 - `packages/llm`: LLM prompt and structured output boundary
-- `packages/evals`: eval runner helpers
+- `packages/evals`: eval case schemas, starter cases, runner, and report formatter
 - `packages/database`: Prisma schema and database client
 - `packages/shared`: shared TypeScript types and Zod schemas
 - `docs`: architecture and product notes
@@ -64,6 +64,14 @@ pnpm --filter @diffguard/cli start -- review --owner OWNER --repo REPO --pull-nu
 ```
 
 See [docs/github-action.md](docs/github-action.md) for the reusable GitHub Action workflow and installation guide.
+
+Run the built-in eval suite:
+
+```bash
+pnpm --filter @diffguard/cli start -- eval run --model gpt-5.5 --prompt-version review-v1 --output markdown
+```
+
+See [docs/evals.md](docs/evals.md) for the eval case format, metrics, and CI usage.
 
 The API exposes:
 

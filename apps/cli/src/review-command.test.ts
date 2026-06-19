@@ -63,6 +63,28 @@ describe("review command", () => {
     });
   });
 
+  it("accepts the npm script separator before review options", () => {
+    const options = parseReviewCommandOptions([
+      "--",
+      "review",
+      "--owner",
+      "acme",
+      "--repo",
+      "widgets",
+      "--pull-number",
+      "42",
+      "--github-token",
+      "ghs_token",
+    ]);
+
+    expect(options).toMatchObject({
+      githubToken: "ghs_token",
+      owner: "acme",
+      pullNumber: 42,
+      repo: "widgets",
+    });
+  });
+
   it("runs the review pipeline and skips posting in dry-run mode", async () => {
     const postedComments: string[] = [];
     const storedRuns: unknown[] = [];

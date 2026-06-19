@@ -20,7 +20,8 @@ DiffGuard-AI is organized as a pnpm TypeScript monorepo with deployable apps and
   prompts, retry-on-invalid-output handling, and model-call telemetry for token usage,
   cost, latency, model name, and prompt version. Callers receive only Zod-validated
   `ReviewFinding` objects.
-- `packages/evals`: Evaluation helpers and future eval runner.
+- `packages/evals`: Zod-validated PR diff eval case format, starter TypeScript bug cases,
+  eval runner, scoring metrics, and JSON/Markdown report formatting for CI.
 - `packages/database`: Prisma schema and database client factory.
 - `packages/shared`: Shared Zod schemas and TypeScript types.
 
@@ -36,6 +37,14 @@ The full AI review workflow is intentionally not implemented in the scaffold. Th
 6. Worker runs static checks and calls `packages/llm` for structured findings.
 7. Worker validates, deduplicates, and posts only high-confidence findings.
 8. Metrics and feedback events are stored for quality tracking.
+
+## Eval Runner
+
+The eval runner executes DiffGuard-AI against PR diff cases without calling GitHub by
+using an in-memory pull request client. It reports precision, recall, false positives,
+false negatives, validator rejection rate, cost, latency, findings per PR, prompt
+version, and model version. The CLI command is `diffguard-ai eval run`; see
+`docs/evals.md` for the case format and CI options.
 
 ## Security Notes
 

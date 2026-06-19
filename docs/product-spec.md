@@ -8,6 +8,7 @@ DiffGuard-AI is an AI-powered GitHub pull request review agent focused on high-c
 - Validate findings before posting comments.
 - Deduplicate repeated comments.
 - Track quality metrics: findings posted, validator rejection rate, false positives, resolution rate, cost, latency, model name, and token usage.
+- Run PR-diff eval suites with expected findings so prompt and model changes can be checked in CI.
 
 ## Non-Goals For Initial Scaffold
 

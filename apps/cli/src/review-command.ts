@@ -141,7 +141,8 @@ type PrismaClientLike = {
 };
 
 export function parseReviewCommandOptions(argv: string[]): ReviewCommandOptions {
-  const [command, ...args] = argv;
+  const normalizedArgv = normalizeCliArgv(argv);
+  const [command, ...args] = normalizedArgv;
   if (command !== "review") {
     throw new Error("Expected command: diffguard-ai review");
   }
@@ -159,6 +160,10 @@ export function parseReviewCommandOptions(argv: string[]): ReviewCommandOptions 
     pullNumber: parsed["pull-number"],
     repo: parsed.repo,
   });
+}
+
+function normalizeCliArgv(argv: string[]): string[] {
+  return argv[0] === "--" ? argv.slice(1) : argv;
 }
 
 export async function runReviewCommand(
