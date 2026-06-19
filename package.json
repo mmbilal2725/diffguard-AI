@@ -1,0 +1,27 @@
+{
+  "name": "diffguard-ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @diffguard/web --filter @diffguard/api --filter @diffguard/worker dev",
+    "lint": "pnpm -r --if-present lint",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "prisma:generate": "pnpm --filter @diffguard/database prisma:generate",
+    "prisma:migrate": "pnpm --filter @diffguard/database prisma:migrate"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "@types/node": "^22.10.7",
+    "eslint": "^9.18.0",
+    "prettier": "^3.4.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.20.0",
+    "vitest": "^2.1.8"
+  }
+}
