@@ -28,6 +28,7 @@ export const ReviewFindingSchema = z
     side: ReviewFindingSideSchema,
     summary: z.string().min(20).max(2000),
     evidence: z.string().min(20).max(3000),
+    improvedComment: z.string().min(20).max(4000).optional(),
     suggestedFix: z.string().min(1).max(2000),
     whyItMatters: z.string().min(20).max(2000),
     relatedRuleIds: z.array(z.string().min(1)).default([]),

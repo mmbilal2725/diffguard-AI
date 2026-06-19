@@ -33,6 +33,7 @@ const ReviewerFindingCandidateSchema = z.object({
   confidence: z.number().min(0).max(1),
   evidence: z.string().min(20).max(3000),
   filePath: z.string().min(1),
+  improvedComment: z.string().min(20).max(4000).optional(),
   line: z.number().int().positive(),
   relatedRuleIds: z.array(z.string().min(1)).default([]),
   severity: FindingSeveritySchema,
@@ -43,8 +44,20 @@ const ReviewerFindingCandidateSchema = z.object({
   whyItMatters: z.string().min(20).max(2000),
 });
 
-type ReviewerFindingCandidate = z.infer<typeof ReviewerFindingCandidateSchema>;
+const FindingValidatorResultSchema = z
+  .object({
+    confidence: z.number().min(0).max(1),
+    falsePositiveRisk: z.enum(["low", "medium", "high"]),
+    improvedComment: z.string().min(20).max(4000).optional(),
+    reason: z.string().min(20).max(2000),
+    shouldPost: z.boolean(),
+    valid: z.boolean(),
+  })
+  .strict();
+
+export type ReviewerFindingCandidate = z.infer<typeof ReviewerFindingCandidateSchema>;
 type StyleOnlyCategory = z.infer<typeof StyleOnlyCategorySchema>;
+export type FindingValidatorResult = z.infer<typeof FindingValidatorResultSchema>;
 
 export type ReviewPipelineGitHubClient = Pick<
   DiffGuardGitHubClient,
@@ -103,7 +116,14 @@ export type StageTiming = {
 
 export type RejectedFinding =
   | {
-      reason: "duplicate" | "low_confidence" | "style_only";
+      reason:
+        | "duplicate"
+        | "high_false_positive_risk"
+        | "low_confidence"
+        | "not_actionable"
+        | "style_only"
+        | "validator_low_confidence"
+        | "validator_rejected";
       title: string;
     }
   | {
@@ -123,11 +143,21 @@ export type ReviewResult = {
 
 export type LlmReviewer = (context: ReviewContext) => Promise<unknown[]>;
 export type StaticCheckRunner = (context: ReviewContext) => Promise<unknown[]>;
+export type FindingValidatorInput = {
+  context: ReviewContext;
+  diff: string;
+  finding: ReviewerFindingCandidate;
+  relevantCodeContext: string[];
+  rules: string | null;
+  staticCheckResults: unknown[];
+};
+export type FindingValidator = (input: FindingValidatorInput) => Promise<unknown>;
 
 export type RunReviewPipelineInput = {
   dryRun?: boolean;
   github: GitHubAuthContext;
   llmReviewer?: LlmReviewer;
+  findingValidator?: FindingValidator;
   owner: string;
   pullNumber: number;
   repo: string;
@@ -229,7 +259,21 @@ export async function runReviewPipeline(input: RunReviewPipelineInput): Promise<
   const { findings: validatedFindings, rejectedFindings: validationRejects } = await recordStage(
     timings,
     "validate_findings",
-    async () => validateReviewerFindings([...staticCandidates, ...llmCandidates]),
+    async () => {
+      const parsed = validateReviewerFindings([...staticCandidates, ...llmCandidates]);
+      const validated = await validateFindingsWithValidator({
+        candidates: parsed.findings,
+        confidenceThreshold: parsedInput.confidenceThreshold,
+        context,
+        findingValidator: input.findingValidator ?? runPlaceholderFindingValidator,
+        staticCheckResults: staticCandidates,
+      });
+
+      return {
+        findings: validated.findings,
+        rejectedFindings: [...parsed.rejectedFindings, ...validated.rejectedFindings],
+      };
+    },
   );
 
   const { findings: dedupedFindings, rejectedFindings: duplicateRejects } = await recordStage(
@@ -260,6 +304,16 @@ export async function runPlaceholderStaticChecks(): Promise<unknown[]> {
 
 export async function runPlaceholderLlmReviewer(): Promise<unknown[]> {
   return [];
+}
+
+export async function runPlaceholderFindingValidator(): Promise<FindingValidatorResult> {
+  return {
+    confidence: 0,
+    falsePositiveRisk: "high",
+    reason: "No validator model was configured, so DiffGuard-AI will not post this finding.",
+    shouldPost: false,
+    valid: false,
+  };
 }
 
 function resolveGitHubClient(context: GitHubAuthContext): ReviewPipelineGitHubClient {
@@ -297,15 +351,95 @@ function validateReviewerFindings(candidates: unknown[]): {
       continue;
     }
 
-    if (isStyleOnlyCategory(parsed.data.category)) {
+    findings.push(parsed.data);
+  }
+
+  return { findings, rejectedFindings };
+}
+
+async function validateFindingsWithValidator(input: {
+  candidates: ReviewerFindingCandidate[];
+  confidenceThreshold: number;
+  context: ReviewContext;
+  findingValidator: FindingValidator;
+  staticCheckResults: unknown[];
+}): Promise<{
+  findings: ReviewerFindingCandidate[];
+  rejectedFindings: RejectedFinding[];
+}> {
+  const findings: ReviewerFindingCandidate[] = [];
+  const rejectedFindings: RejectedFinding[] = [];
+  const diff = buildPullRequestDiff(input.context);
+
+  for (const candidate of input.candidates) {
+    const rawValidation = await input.findingValidator({
+      context: input.context,
+      diff,
+      finding: candidate,
+      relevantCodeContext: buildRelevantCodeContext(input.context, candidate),
+      rules: input.context.rules.content,
+      staticCheckResults: input.staticCheckResults,
+    });
+    const validation = FindingValidatorResultSchema.safeParse(rawValidation);
+
+    if (!validation.success) {
       rejectedFindings.push({
-        reason: "style_only",
-        title: parsed.data.title,
+        reason: "invalid",
+        title: candidate.title,
+        validationIssues: validation.error.issues.map((issue) => ({
+          message: issue.message,
+          path: issue.path.join("."),
+        })),
       });
       continue;
     }
 
-    findings.push(parsed.data);
+    if (!validation.data.valid || !validation.data.shouldPost) {
+      rejectedFindings.push({
+        reason: "validator_rejected",
+        title: candidate.title,
+      });
+      continue;
+    }
+
+    if (validation.data.confidence <= input.confidenceThreshold) {
+      rejectedFindings.push({
+        reason: "validator_low_confidence",
+        title: candidate.title,
+      });
+      continue;
+    }
+
+    if (validation.data.falsePositiveRisk === "high") {
+      rejectedFindings.push({
+        reason: "high_false_positive_risk",
+        title: candidate.title,
+      });
+      continue;
+    }
+
+    if (isStyleOnlyCategory(candidate.category)) {
+      rejectedFindings.push({
+        reason: "style_only",
+        title: candidate.title,
+      });
+      continue;
+    }
+
+    if (!isActionableFinding(candidate)) {
+      rejectedFindings.push({
+        reason: "not_actionable",
+        title: candidate.title,
+      });
+      continue;
+    }
+
+    findings.push({
+      ...candidate,
+      ...(validation.data.improvedComment === undefined
+        ? {}
+        : { improvedComment: validation.data.improvedComment }),
+    });
   }
 
   return { findings, rejectedFindings };
@@ -427,6 +561,39 @@ function readCandidateTitle(candidate: unknown): string | undefined {
   }
 
   return undefined;
+}
+
+function buildPullRequestDiff(context: ReviewContext): string {
+  if (context.files.length === 0) {
+    return "No changed files.";
+  }
+
+  return context.files.map(formatFileDiff).join("\n\n");
+}
+
+function buildRelevantCodeContext(
+  context: ReviewContext,
+  finding: ReviewerFindingCandidate,
+): string[] {
+  const file = context.files.find((changedFile) => changedFile.filename === finding.filePath);
+
+  if (file === undefined) {
+    return [];
+  }
+
+  return [formatFileDiff(file)];
+}
+
+function formatFileDiff(file: PullRequestFile): string {
+  return [`File: ${file.filename}`, "Patch:", file.patch ?? "No patch available."].join("\n");
+}
+
+function isActionableFinding(finding: ReviewerFindingCandidate): boolean {
+  return (
+    finding.evidence.trim().length >= 20 &&
+    finding.suggestedFix.trim().length >= 20 &&
+    finding.whyItMatters.trim().length >= 20
+  );
 }
 
 function isStyleOnlyCategory(
