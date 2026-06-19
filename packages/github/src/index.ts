@@ -1,3 +1,5 @@
+import { createSign } from "node:crypto";
+
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
 
@@ -107,6 +109,22 @@ const PullRequestReviewResponseSchema = z.object({
   state: z.string(),
 });
 
+const GitHubAppInstallationTokenInputSchema = z.object({
+  appId: z.string().min(1),
+  baseUrl: z.string().url().default("https://api.github.com"),
+  fetchImpl: z
+    .custom<FetchLike>()
+    .default(() => fetch as FetchLike),
+  installationId: z.string().min(1),
+  now: z.date().default(() => new Date()),
+  privateKey: z.string().min(1),
+});
+
+const InstallationTokenResponseSchema = z.object({
+  expires_at: z.string().min(1),
+  token: z.string().min(1),
+});
+
 export type PullRequestRef = z.infer<typeof PullRequestRefSchema>;
 export type FileAtRefInput = z.infer<typeof FileAtRefInputSchema>;
 export type PostPullRequestCommentInput = z.infer<typeof PostPullRequestCommentInputSchema>;
@@ -182,6 +200,25 @@ export type GitHubError = {
 export type GitHubResult<T> = { ok: true; data: T } | { ok: false; error: GitHubError };
 
 export type GitHubClientConfig = z.input<typeof GitHubClientConfigSchema>;
+export type GitHubAppInstallationTokenInput = z.input<
+  typeof GitHubAppInstallationTokenInputSchema
+>;
+export type GitHubAppInstallationToken = {
+  expiresAt: string;
+  token: string;
+};
+
+type FetchLike = (
+  url: string,
+  init: {
+    headers: Record<string, string>;
+    method: "POST";
+  },
+) => Promise<{
+  json(): Promise<unknown>;
+  ok: boolean;
+  status: number;
+}>;
 
 type GitHubResponse<T> = Promise<{ data: T }>;
 
@@ -263,6 +300,39 @@ export function buildPullRequestKey(ref: PullRequestRef): string {
   const parsed = PullRequestRefSchema.parse(ref);
 
   return `${parsed.owner}/${parsed.repo}#${parsed.number}`;
+}
+
+export async function createGitHubAppInstallationToken(
+  input: GitHubAppInstallationTokenInput,
+): Promise<GitHubAppInstallationToken> {
+  const parsed = GitHubAppInstallationTokenInputSchema.parse(input);
+  const jwt = createGitHubAppJwt({
+    appId: parsed.appId,
+    now: parsed.now,
+    privateKey: parsed.privateKey,
+  });
+  const response = await parsed.fetchImpl(
+    `${parsed.baseUrl}/app/installations/${parsed.installationId}/access_tokens`,
+    {
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${jwt}`,
+        "x-github-api-version": "2022-11-28",
+      },
+      method: "POST",
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to create GitHub installation token. Status: ${response.status}.`);
+  }
+
+  const payload = InstallationTokenResponseSchema.parse(await response.json());
+
+  return {
+    expiresAt: payload.expires_at,
+    token: payload.token,
+  };
 }
 
 export function createGitHubClient(config: GitHubClientConfig): DiffGuardGitHubClient {
@@ -426,6 +496,32 @@ export function createGitHubClient(config: GitHubClientConfig): DiffGuardGitHubC
       });
     },
   };
+}
+
+function createGitHubAppJwt(input: { appId: string; now: Date; privateKey: string }): string {
+  const issuedAt = Math.floor(input.now.getTime() / 1000) - 60;
+  const expiresAt = issuedAt + 9 * 60;
+  const header = base64UrlJson({
+    alg: "RS256",
+    typ: "JWT",
+  });
+  const payload = base64UrlJson({
+    exp: expiresAt,
+    iat: issuedAt,
+    iss: input.appId,
+  });
+  const signingInput = `${header}.${payload}`;
+  const signature = createSign("RSA-SHA256")
+    .update(signingInput)
+    .end()
+    .sign(input.privateKey)
+    .toString("base64url");
+
+  return `${signingInput}.${signature}`;
+}
+
+function base64UrlJson(value: unknown): string {
+  return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
 }
 
 async function withValidatedInput<TInput, TOutput>(

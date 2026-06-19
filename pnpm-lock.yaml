@@ -35,6 +35,15 @@ importers:
 
   apps/api:
     dependencies:
+      '@diffguard/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@diffguard/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      bullmq:
+        specifier: ^5.34.1
+        version: 5.79.0
       fastify:
         specifier: ^5.2.1
         version: 5.8.5
@@ -149,6 +158,15 @@ importers:
 
   apps/worker:
     dependencies:
+      '@diffguard/github':
+        specifier: workspace:*
+        version: link:../../packages/github
+      '@diffguard/reviewer':
+        specifier: workspace:*
+        version: link:../../packages/reviewer
+      '@diffguard/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       bullmq:
         specifier: ^5.34.1
         version: 5.79.0

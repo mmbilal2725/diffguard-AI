@@ -1,6 +1,12 @@
+import { generateKeyPairSync } from "node:crypto";
+
 import { describe, expect, it, vi } from "vitest";
 
-import { buildPullRequestKey, createGitHubClient } from "./index.js";
+import {
+  buildPullRequestKey,
+  createGitHubAppInstallationToken,
+  createGitHubClient,
+} from "./index.js";
 
 function createMockOctokit() {
   return {
@@ -27,6 +33,47 @@ describe("buildPullRequestKey", () => {
     expect(buildPullRequestKey({ owner: "openai", repo: "codex", number: 17 })).toBe(
       "openai/codex#17",
     );
+  });
+});
+
+describe("createGitHubAppInstallationToken", () => {
+  it("exchanges a GitHub App JWT for an installation token", async () => {
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const privateKeyPem = privateKey
+      .export({ format: "pem", type: "pkcs8" })
+      .toString();
+    const fetchImpl = vi.fn(async () => ({
+      json: async () => ({
+        expires_at: "2026-06-20T00:00:00Z",
+        token: "ghs_installation_token",
+      }),
+      ok: true,
+      status: 201,
+    }));
+
+    const token = await createGitHubAppInstallationToken({
+      appId: "12345",
+      fetchImpl,
+      installationId: "98765",
+      privateKey: privateKeyPem,
+    });
+
+    expect(token).toEqual({
+      expiresAt: "2026-06-20T00:00:00Z",
+      token: "ghs_installation_token",
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://api.github.com/app/installations/98765/access_tokens",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          accept: "application/vnd.github+json",
+          authorization: expect.stringMatching(/^Bearer [^.]+\.[^.]+\.[^.]+$/),
+        }),
+        method: "POST",
+      }),
+    );
+    expect(JSON.stringify(fetchImpl.mock.calls)).not.toContain(privateKeyPem);
+    expect(JSON.stringify(fetchImpl.mock.calls)).not.toContain("ghs_installation_token");
   });
 });
 

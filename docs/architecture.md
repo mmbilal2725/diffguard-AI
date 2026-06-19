@@ -5,7 +5,7 @@ DiffGuard-AI is organized as a pnpm TypeScript monorepo with deployable apps and
 ## Apps
 
 - `apps/web`: Next.js dashboard for review quality metrics and run visibility.
-- `apps/api`: Fastify API and future GitHub webhook receiver.
+- `apps/api`: Fastify API and GitHub App webhook receiver.
 - `apps/worker`: BullMQ worker for asynchronous pull request review jobs.
 
 ## Packages
@@ -29,14 +29,17 @@ DiffGuard-AI is organized as a pnpm TypeScript monorepo with deployable apps and
 
 The full AI review workflow is intentionally not implemented in the scaffold. The planned runtime flow is:
 
-1. GitHub webhook reaches `apps/api`.
-2. API records repository, pull request, and review run metadata in Postgres.
-3. API enqueues a BullMQ review job in Redis.
-4. Worker fetches the PR diff and relevant context through `packages/github`.
-5. Worker reads `.diffguard-rules.md` from the target repository.
-6. Worker runs static checks and calls `packages/llm` for structured findings.
-7. Worker validates, deduplicates, and posts only high-confidence findings.
-8. Metrics and feedback events are stored for quality tracking.
+1. GitHub App webhook reaches `apps/api`.
+2. API verifies `x-hub-signature-256` against the raw request body.
+3. API records the webhook delivery id for idempotency and ignores duplicate deliveries.
+4. API records repository installation, pull request, and queued review run metadata in Postgres.
+5. API enqueues a BullMQ `review-pr` job in Redis.
+6. Worker creates a short-lived GitHub App installation token for the repository installation.
+7. Worker fetches the PR diff and relevant context through `packages/github`.
+8. Worker reads `.diffguard-rules.md` from the target repository.
+9. Worker runs static checks and calls `packages/llm` for structured findings.
+10. Worker validates, deduplicates, and posts only high-confidence findings.
+11. Metrics and feedback events are stored for quality tracking.
 
 ## Eval Runner
 
@@ -48,4 +51,4 @@ version, and model version. The CLI command is `diffguard-ai eval run`; see
 
 ## Security Notes
 
-Secrets should be supplied through environment variables and must not be logged. Webhook payloads, GitHub tokens, private keys, and model API keys should be treated as sensitive data.
+Secrets should be supplied through environment variables and must not be logged. Webhook secrets, GitHub App private keys, installation tokens, webhook payloads, and model API keys should be treated as sensitive data.

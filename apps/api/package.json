@@ -10,6 +10,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@diffguard/database": "workspace:*",
+    "@diffguard/shared": "workspace:*",
+    "bullmq": "^5.34.1",
     "fastify": "^5.2.1",
     "zod": "^3.24.1"
   },

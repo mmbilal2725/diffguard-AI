@@ -1,10 +1,8 @@
 import { Worker } from "bullmq";
+import { type ReviewJobData } from "@diffguard/shared";
 
 import { createWorkerConfig } from "./config.js";
-
-type ReviewRunJob = {
-  reviewRunId: string;
-};
+import { createReviewProcessor } from "./review-processor.js";
 
 const config = createWorkerConfig(process.env);
 const redisUrl = new URL(config.redisUrl);
@@ -16,11 +14,12 @@ const connection = {
   maxRetriesPerRequest: null
 };
 
-const worker = new Worker<ReviewRunJob>(
+const worker = new Worker<ReviewJobData>(
   config.queueName,
-  async (job) => {
-    job.log(`Received review run ${job.data.reviewRunId}`);
-  },
+  createReviewProcessor({
+    appId: config.githubAppId,
+    privateKey: config.githubAppPrivateKey,
+  }),
   { connection },
 );
 

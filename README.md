@@ -55,7 +55,15 @@ pnpm typecheck
 pnpm test
 ```
 
-## GitHub Action and CLI
+## GitHub App, Action, and CLI
+
+GitHub App mode is the server-based integration path. The API receives signed GitHub webhooks at:
+
+```text
+POST /webhooks/github
+```
+
+It verifies `x-hub-signature-256`, ignores unsupported events, deduplicates `x-github-delivery` ids, tracks repository installations, and queues BullMQ review jobs for supported PR activity and `/diffguard review` comments. See [docs/github-app.md](docs/github-app.md).
 
 Run a pull request review from the CLI:
 
@@ -77,6 +85,7 @@ The API exposes:
 
 ```text
 GET /health
+POST /webhooks/github
 ```
 
 Expected response:
@@ -93,7 +102,7 @@ Copy `.env.example` to `.env` and fill in real values when integrating GitHub an
 DATABASE_URL="postgresql://diffguard:diffguard@localhost:5432/diffguard?schema=public"
 REDIS_URL="redis://localhost:6379"
 GITHUB_APP_ID=""
-GITHUB_PRIVATE_KEY=""
+GITHUB_APP_PRIVATE_KEY=""
 GITHUB_WEBHOOK_SECRET=""
 OPENAI_API_KEY=""
 ```

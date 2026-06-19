@@ -88,8 +88,8 @@ model PullRequest {
   number       Int
   title        String
   authorLogin  String?
-  baseSha      String
-  headSha      String
+  baseSha      String?
+  headSha      String?
   status       PullRequestStatus @default(OPEN)
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
@@ -104,6 +104,8 @@ model ReviewRun {
   id                      String          @id @default(cuid())
   pullRequestId           String
   status                  ReviewRunStatus @default(QUEUED)
+  trigger                 String?
+  githubDeliveryId        String?
   startedAt               DateTime?
   completedAt             DateTime?
   findingsDetected        Int             @default(0)
@@ -121,7 +123,20 @@ model ReviewRun {
   feedbackEvents          FeedbackEvent[]
 
   @@index([pullRequestId, status])
+  @@index([githubDeliveryId])
   @@index([createdAt])
+}
+
+model WebhookDelivery {
+  id          String   @id @default(cuid())
+  deliveryId  String   @unique
+  eventName   String
+  action      String?
+  processedAt DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([eventName, action])
+  @@index([processedAt])
 }
 
 model Finding {
