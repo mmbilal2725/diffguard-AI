@@ -37,9 +37,11 @@ The pipeline flow is:
 
 Missing `.diffguard-rules.md` is treated as an empty rules context and does not
 fail the review. Comment posting happens after this package returns a
-`ReviewResult`: the CLI caps findings, skips previously posted dedupe keys when
-database state is available, uses the shared unified diff parser to map findings
-to diff-valid lines, batches inline GitHub review comments into one review, and
-posts a summary issue comment only for findings that cannot be mapped inline. If
-no validator is configured, the default validator rejects candidates so
-DiffGuard-AI prefers silence over posting unvalidated comments.
+`ReviewResult`: `packages/review-run` caps findings, skips previously posted
+dedupe keys when database state is available, uses the shared unified diff
+parser to map findings to diff-valid lines, batches inline GitHub review
+comments into one review, posts a summary issue comment only for findings that
+cannot be mapped inline, and stores review-run/finding records. The CLI and
+GitHub App worker both use this shared finalization package. If no validator is
+configured, the default validator rejects candidates so DiffGuard-AI prefers
+silence over posting unvalidated comments.

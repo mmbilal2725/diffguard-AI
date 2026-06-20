@@ -53,4 +53,5 @@ Do not log the private key, webhook secret, or installation tokens. DiffGuard st
 4. Supported PR events and the manual comment command upsert repository installation and pull request metadata.
 5. The API creates a queued review run and adds a BullMQ `review-pr` job.
 6. The worker creates a short-lived installation token for the job installation id.
-7. The worker runs the review pipeline with that installation token.
+7. The worker runs the review pipeline with an installation-token GitHub client.
+8. The worker uses `packages/review-run` to post validated inline or fallback comments, skip previously posted duplicate findings, and store the completed review run plus finding records when `DATABASE_URL` is configured.

@@ -1,4 +1,16 @@
-import { createGitHubAppInstallationToken, type GitHubAppInstallationToken } from "@diffguard/github";
+import {
+  createGitHubAppInstallationToken,
+  createGitHubClient,
+  type DiffGuardGitHubClient,
+  type GitHubAppInstallationToken,
+  type PullRequestRef,
+} from "@diffguard/github";
+import {
+  finalizeReviewRun,
+  type FinalizeReviewRunInput,
+  type FinalizeReviewRunResult,
+  type StoreReviewRunInput,
+} from "@diffguard/review-run";
 import {
   runReviewPipeline,
   trackFindingResolutions,
@@ -18,6 +30,8 @@ type InstallationTokenFactory = (input: {
 }) => Promise<GitHubAppInstallationToken>;
 
 type ReviewPipelineRunner = (input: RunReviewPipelineInput) => Promise<ReviewResult>;
+type GitHubClientFactory = (config: { authToken: string }) => DiffGuardGitHubClient;
+type ReviewRunFinalizer = (input: FinalizeReviewRunInput) => Promise<FinalizeReviewRunResult>;
 
 export type ResolutionStore = {
   listPostedFindings(input: {
@@ -39,11 +53,15 @@ export type ReviewJobLike = {
 
 export type CreateReviewProcessorOptions = {
   appId: string | undefined;
+  createGitHubClient?: GitHubClientFactory;
   createInstallationToken?: InstallationTokenFactory;
+  finalizeReviewRun?: ReviewRunFinalizer;
+  loadPostedFindingDedupeKeys?: (input: PullRequestRef) => Promise<Set<string>>;
   privateKey: string | undefined;
   resolutionStore?: ResolutionStore;
   resolutionValidator?: ResolutionValidator;
   runReviewPipeline?: ReviewPipelineRunner;
+  storeReviewRun?: (input: StoreReviewRunInput) => Promise<void>;
 };
 
 export function createReviewProcessor(options: CreateReviewProcessorOptions) {
@@ -62,13 +80,30 @@ export function createReviewProcessor(options: CreateReviewProcessorOptions) {
       installationId: data.installationId,
       privateKey: options.privateKey,
     });
+    const githubClientFactory = options.createGitHubClient ?? createGitHubClient;
+    const githubClient = githubClientFactory({ authToken: installationToken.token });
     const pipeline = options.runReviewPipeline ?? runReviewPipeline;
     const result = await pipeline({
       dryRun: false,
-      github: { authToken: installationToken.token },
+      github: { client: githubClient },
       owner: data.owner,
       pullNumber: data.pullNumber,
       repo: data.repo,
+    });
+    const finalizer = options.finalizeReviewRun ?? finalizeReviewRun;
+    const finalized = await finalizer({
+      dryRun: false,
+      githubClient,
+      ...(options.loadPostedFindingDedupeKeys === undefined
+        ? {}
+        : { loadPostedFindingDedupeKeys: options.loadPostedFindingDedupeKeys }),
+      ref: {
+        number: data.pullNumber,
+        owner: data.owner,
+        repo: data.repo,
+      },
+      result,
+      ...(options.storeReviewRun === undefined ? {} : { storeReviewRun: options.storeReviewRun }),
     });
 
     if (options.resolutionStore !== undefined && options.resolutionValidator !== undefined) {
@@ -81,8 +116,8 @@ export function createReviewProcessor(options: CreateReviewProcessorOptions) {
       if (postedFindings.length > 0) {
         const resolutionResult = await trackFindingResolutions({
           findings: postedFindings,
-          latestDiff: buildLatestDiff(result),
-          latestFiles: result.context.files,
+          latestDiff: buildLatestDiff(finalized.result),
+          latestFiles: finalized.result.context.files,
           validator: options.resolutionValidator,
         });
 
@@ -96,7 +131,7 @@ export function createReviewProcessor(options: CreateReviewProcessorOptions) {
     await job.log?.(`Completed review run ${data.reviewRunId}`);
 
     return {
-      findings: result.findings.length,
+      findings: finalized.result.findings.length,
       reviewRunId: data.reviewRunId,
     };
   };

@@ -1,6 +1,10 @@
 import { Worker } from "bullmq";
 import { createDatabaseClient } from "@diffguard/database";
 import { createOpenAIProvider, validateFindingResolutionWithLlm } from "@diffguard/llm";
+import {
+  loadPostedFindingDedupeKeysFromDatabase,
+  storeReviewRunInDatabase,
+} from "@diffguard/review-run";
 import { type ReviewJobData } from "@diffguard/shared";
 
 import { createWorkerConfig } from "./config.js";
@@ -20,6 +24,14 @@ const resolutionStore =
   process.env.DATABASE_URL === undefined
     ? undefined
     : createPrismaResolutionStore(createDatabaseClient() as never);
+const reviewRunPersistence =
+  process.env.DATABASE_URL === undefined
+    ? {}
+    : {
+        loadPostedFindingDedupeKeys: (ref: { owner: string; repo: string; number: number }) =>
+          loadPostedFindingDedupeKeysFromDatabase({ ref }),
+        storeReviewRun: storeReviewRunInDatabase,
+      };
 const resolutionProvider =
   config.openaiApiKey === undefined
     ? undefined
@@ -33,6 +45,7 @@ const worker = new Worker<ReviewJobData>(
   createReviewProcessor({
     appId: config.githubAppId,
     privateKey: config.githubAppPrivateKey,
+    ...reviewRunPersistence,
     resolutionStore,
     resolutionValidator:
       resolutionProvider === undefined
