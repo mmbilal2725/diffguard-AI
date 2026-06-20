@@ -434,6 +434,58 @@ describe("review pipeline", () => {
     ]);
     expect(result.timings.every((timing) => timing.durationMs >= 0)).toBe(true);
   });
+
+  it("preserves model-call telemetry returned by the LLM reviewer", async () => {
+    const github = createGitHubClientDouble();
+    const findingValidator = createApprovingValidator();
+    const llmReviewer: LlmReviewer = async () => ({
+      findings: [
+        createFinding({
+          category: "logic",
+          confidence: 0.96,
+          title: "Changed null check can throw",
+        }),
+      ],
+      modelCalls: [
+        {
+          attempt: 1,
+          costUsd: 0.0004,
+          latencyMs: 25,
+          model: "fake-review-model",
+          promptVersion: "review-v1",
+          provider: "fake",
+          status: "succeeded",
+          templateId: "logic-bugs",
+          tokenUsage: {
+            inputTokens: 100,
+            outputTokens: 25,
+            totalTokens: 125,
+          },
+        },
+      ],
+    });
+
+    const result = await runReviewPipeline({
+      findingValidator,
+      github: { client: github },
+      llmReviewer,
+      owner: "acme",
+      pullNumber: 42,
+      repo: "widgets",
+    });
+
+    expect(result.findings).toHaveLength(1);
+    expect(result.modelCalls).toEqual([
+      expect.objectContaining({
+        attempt: 1,
+        model: "fake-review-model",
+        promptVersion: "review-v1",
+        provider: "fake",
+        status: "succeeded",
+        templateId: "logic-bugs",
+      }),
+    ]);
+  });
 });
 
 function createGitHubClientDouble(

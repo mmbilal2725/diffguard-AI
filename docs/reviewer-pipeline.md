@@ -1,8 +1,12 @@
 # Reviewer Pipeline
 
-`packages/reviewer` contains the first review pipeline version. It accepts a
-repository owner, repository name, pull request number, and GitHub auth context.
-The auth context can provide either an auth token or an injected GitHub client.
+`packages/reviewer` contains the review pipeline. It accepts a repository owner,
+repository name, pull request number, and GitHub auth context. The auth context
+can provide either an auth token or an injected GitHub client.
+
+The package is intentionally strict: every candidate must match the structured
+finding schema, pass validator review, survive deduplication, and clear the
+configured confidence threshold before it can be posted.
 
 The pipeline flow is:
 
@@ -10,8 +14,12 @@ The pipeline flow is:
 2. List changed files.
 3. Read `.diffguard-rules.md` from the pull request head SHA.
 4. Build a `ReviewContext`.
-5. Run placeholder static checks.
-6. Run a placeholder or injected LLM reviewer.
+5. Run static checks. The default runner is a no-op until concrete checks are
+   configured.
+6. Run LLM review candidates. The default package runner is a no-op; callers can
+   inject one or more structured LLM review passes. The CLI injects the
+   `packages/llm` reviewer when `OPENAI_API_KEY` is configured and runs
+   `logic-bugs`, `security-bugs`, and `regression-test-gaps`.
 7. Validate reviewer output with Zod.
 8. Call the finding validator for every parsed candidate. The validator receives
    the PR diff, relevant file patch context, `.diffguard-rules.md` content,
@@ -25,13 +33,13 @@ The pipeline flow is:
 12. Dedupe by file path, start line, category, and normalized title.
 13. Filter findings below the original reviewer confidence threshold.
 14. Return a `ReviewResult` with findings, rejected finding reasons, dry-run
-    state, and per-stage timings.
+    state, model-call telemetry, and per-stage timings.
 
 Missing `.diffguard-rules.md` is treated as an empty rules context and does not
 fail the review. Comment posting happens after this package returns a
 `ReviewResult`: the CLI caps findings, skips previously posted dedupe keys when
-database state is available, maps findings to diff-valid lines, batches inline
-GitHub review comments into one review, and posts a summary issue comment only
-for findings that cannot be mapped inline. If no validator is configured, the
-placeholder validator rejects candidates by default so DiffGuard-AI prefers
-silence over posting unvalidated comments.
+database state is available, uses the shared unified diff parser to map findings
+to diff-valid lines, batches inline GitHub review comments into one review, and
+posts a summary issue comment only for findings that cannot be mapped inline. If
+no validator is configured, the default validator rejects candidates so
+DiffGuard-AI prefers silence over posting unvalidated comments.

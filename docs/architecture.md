@@ -24,11 +24,18 @@ DiffGuard-AI is organized as a pnpm TypeScript monorepo with deployable apps and
 - `packages/evals`: Zod-validated PR diff eval case format, starter TypeScript bug cases,
   eval runner, scoring metrics, and JSON/Markdown report formatting for CI.
 - `packages/database`: Prisma schema and database client factory.
-- `packages/shared`: Shared Zod schemas and TypeScript types.
+- `packages/shared`: Shared Zod schemas, TypeScript types, and reusable unified
+  diff parsing for file, hunk, and changed-line metadata.
 
 ## Review Pipeline
 
-The full AI review workflow is intentionally not implemented in the scaffold. The planned runtime flow is:
+The review workflow is designed around explicit stages so each quality gate can
+be tested independently. The default static and reviewer runners are conservative
+no-ops until concrete implementations are configured; the pipeline still enforces
+validation, deduplication, and confidence filtering for any candidate findings it
+receives.
+
+Runtime flow:
 
 1. GitHub App webhook reaches `apps/api`.
 2. API verifies `x-hub-signature-256` against the raw request body.
@@ -38,11 +45,13 @@ The full AI review workflow is intentionally not implemented in the scaffold. Th
 6. Worker creates a short-lived GitHub App installation token for the repository installation.
 7. Worker fetches the PR diff and relevant context through `packages/github`.
 8. Worker reads `.diffguard-rules.md` from the target repository.
-9. Worker runs static checks and calls `packages/llm` for structured findings.
-10. Worker validates, deduplicates, and posts only high-confidence findings.
-11. Inline-capable findings are batched into one GitHub review; unmapped findings use
+9. Diff parsing records file, hunk, old-line, and new-line metadata for context
+   building and GitHub comment mapping.
+10. Worker runs static checks and structured LLM review passes when configured.
+11. Worker validates, deduplicates, and posts only high-confidence findings.
+12. Inline-capable findings are batched into one GitHub review; unmapped findings use
     a summary issue comment fallback.
-12. Metrics, GitHub comment IDs, and feedback events are stored for quality tracking.
+13. Metrics, GitHub comment IDs, and feedback events are stored for quality tracking.
 
 ## Resolution Tracking
 
@@ -64,6 +73,17 @@ false negatives, validator rejection rate, cost, latency, findings per PR, promp
 version, and model version. The CLI command is `diffguard-ai eval run`; see
 `docs/evals.md` for the case format and CI options.
 
+## Public Demo Narrative
+
+For portfolio and interview use, the important engineering story is not just
+"an LLM comments on a PR." DiffGuard-AI demonstrates the production controls
+around that idea: signed webhook ingestion, idempotent queueing, installation
+token isolation, repo-specific policy, structured model output, validator
+rejection, confidence thresholds, dedupe, inline comment mapping, persistence,
+eval reporting, and dashboard visibility.
+
 ## Security Notes
 
-Secrets should be supplied through environment variables and must not be logged. Webhook secrets, GitHub App private keys, installation tokens, webhook payloads, and model API keys should be treated as sensitive data.
+Secrets should be supplied through environment variables and must not be logged.
+Webhook secrets, GitHub App private keys, installation tokens, webhook payloads,
+and model API keys should be treated as sensitive data.

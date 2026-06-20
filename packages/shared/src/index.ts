@@ -4,7 +4,15 @@ export {
   ReviewFindingSchema,
   ReviewFindingSideSchema,
 } from "./review-finding.js";
+export { parseUnifiedDiff } from "./diff-parser.js";
 export { REVIEW_QUEUE_JOB_NAME, ReviewJobDataSchema, ReviewTriggerSchema } from "./review-job.js";
+export type {
+  UnifiedDiff,
+  UnifiedDiffFile,
+  UnifiedDiffHunk,
+  UnifiedDiffLine,
+  UnifiedDiffLineKind,
+} from "./diff-parser.js";
 export type {
   FindingCategory,
   FindingSeverity,

@@ -8,15 +8,28 @@ import {
 } from "@diffguard/github";
 import {
   runReviewPipeline,
+  type FindingValidator,
+  type LlmReviewer,
   type RejectedFinding,
   type ReviewResult,
   type RunReviewPipelineInput,
 } from "@diffguard/reviewer";
-import type { ReviewFinding } from "@diffguard/shared";
+import {
+  createOpenAIProvider,
+  reviewDiffWithLlm,
+  type LlmProvider,
+  type ReviewPromptTemplateId,
+} from "@diffguard/llm";
+import { parseUnifiedDiff, type ReviewFinding } from "@diffguard/shared";
 import { z } from "zod";
 
 const DEFAULT_MIN_CONFIDENCE = 0.7;
 const DEFAULT_OUTPUT_FORMAT = "markdown";
+const REVIEW_TEMPLATE_IDS = [
+  "logic-bugs",
+  "security-bugs",
+  "regression-test-gaps",
+] as const satisfies readonly ReviewPromptTemplateId[];
 
 const ReviewCommandOptionsSchema = z.object({
   dryRun: z.boolean().default(false),
@@ -48,7 +61,9 @@ export type StoreReviewRunInput = {
 
 export type ReviewCommandDependencies = {
   createGitHubClient?: (config: { authToken: string }) => DiffGuardGitHubClient;
+  createLlmProvider?: (config: { apiKey: string; model?: string }) => LlmProvider;
   env?: Record<string, string | undefined>;
+  findingValidator?: FindingValidator;
   loadPostedFindingDedupeKeys?: (input: PullRequestRef) => Promise<Set<string>>;
   runReviewPipeline?: (input: RunReviewPipelineInput) => Promise<ReviewResult>;
   storeReviewRun?: (input: StoreReviewRunInput) => Promise<void>;
@@ -216,14 +231,23 @@ export async function runReviewCommand(
   const githubClientFactory = dependencies.createGitHubClient ?? createGitHubClient;
   const githubClient = githubClientFactory({ authToken });
   const pipeline = dependencies.runReviewPipeline ?? runReviewPipeline;
-  const rawReviewResult = await pipeline({
+  const pipelineInput: RunReviewPipelineInput = {
     confidenceThreshold: options.minConfidence,
     dryRun: options.dryRun,
     github: { client: githubClient },
     owner: options.owner,
     pullNumber: options.pullNumber,
     repo: options.repo,
-  });
+    ...(dependencies.findingValidator === undefined
+      ? {}
+      : { findingValidator: dependencies.findingValidator }),
+    ...buildDefaultLlmReviewerInput({
+      createLlmProvider: dependencies.createLlmProvider,
+      env,
+      model: options.model,
+    }),
+  };
+  const rawReviewResult = await pipeline(pipelineInput);
   const ref = {
     number: options.pullNumber,
     owner: options.owner,
@@ -381,6 +405,87 @@ function limitFindings(result: ReviewResult, maxFindings: number | undefined): R
   };
 }
 
+function buildDefaultLlmReviewerInput(input: {
+  createLlmProvider?: (config: { apiKey: string; model?: string }) => LlmProvider;
+  env: Record<string, string | undefined>;
+  model?: string;
+}): Pick<RunReviewPipelineInput, "llmReviewer"> {
+  const apiKey = input.env.OPENAI_API_KEY;
+  if (apiKey === undefined || apiKey.trim() === "") {
+    return {};
+  }
+
+  const provider = (input.createLlmProvider ?? createOpenAIProvider)({
+    apiKey,
+    model: input.model,
+  });
+
+  return {
+    llmReviewer: createReviewDiffLlmReviewer({
+      model: input.model,
+      provider,
+    }),
+  };
+}
+
+function createReviewDiffLlmReviewer(input: {
+  model?: string;
+  provider: LlmProvider;
+}): LlmReviewer {
+  return async (context) => {
+    const findings: ReviewFinding[] = [];
+    const modelCalls: NonNullable<ReviewResult["modelCalls"]> = [];
+    const diff = buildPullRequestDiff(context.files);
+    const promptContext = buildPromptContext(context);
+
+    for (const templateId of REVIEW_TEMPLATE_IDS) {
+      const result = await reviewDiffWithLlm({
+        context: promptContext,
+        diff,
+        ...(input.model === undefined ? {} : { model: input.model }),
+        provider: input.provider,
+        providerName: "openai",
+        rules: context.rules.content,
+        templateId,
+      });
+
+      findings.push(...result.findings);
+      modelCalls.push(
+        ...result.modelCalls.map((call) => ({
+          ...call,
+          templateId,
+        })),
+      );
+    }
+
+    return {
+      findings,
+      modelCalls,
+    };
+  };
+}
+
+function buildPromptContext(context: ReviewResult["context"]): string[] {
+  return [
+    `Pull request #${context.pullRequest.number}: ${context.pullRequest.title}`,
+    `Base: ${context.pullRequest.baseRef} (${context.pullRequest.baseSha})`,
+    `Head: ${context.pullRequest.headRef} (${context.pullRequest.headSha})`,
+    `Changed files: ${context.files.map((file) => file.filename).join(", ") || "none"}`,
+  ];
+}
+
+function buildPullRequestDiff(files: PullRequestFile[]): string {
+  if (files.length === 0) {
+    return "No changed files.";
+  }
+
+  return files.map(formatFileDiff).join("\n\n");
+}
+
+function formatFileDiff(file: PullRequestFile): string {
+  return [`File: ${file.filename}`, "Patch:", file.patch ?? "No patch available."].join("\n");
+}
+
 function filterPreviouslyPostedFindings(
   result: ReviewResult,
   postedDedupeKeys: Set<string>,
@@ -522,7 +627,9 @@ function mapFindingToReviewComment(
     return { kind: "deleted" };
   }
 
-  const diffLines = parsePatchLines(file.patch);
+  const diffLines = parseUnifiedDiff(file.patch).files.flatMap((parsedFile) =>
+    parsedFile.hunks.flatMap((hunk) => hunk.lines),
+  );
   const lineIsInDiff = diffLines.some((line) => {
     if (finding.side === "RIGHT") {
       return line.newLine === finding.line && line.kind !== "delete";
@@ -541,46 +648,6 @@ function mapFindingToReviewComment(
     path: file.filename,
     side: finding.side,
   };
-}
-
-function parsePatchLines(
-  patch: string,
-): Array<{ kind: "add" | "context" | "delete"; newLine?: number; oldLine?: number }> {
-  const diffLines: Array<{ kind: "add" | "context" | "delete"; newLine?: number; oldLine?: number }> =
-    [];
-  let oldLine: number | undefined;
-  let newLine: number | undefined;
-
-  for (const patchLine of patch.split("\n")) {
-    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(patchLine);
-    if (hunk !== null) {
-      oldLine = Number.parseInt(hunk[1] ?? "0", 10);
-      newLine = Number.parseInt(hunk[2] ?? "0", 10);
-      continue;
-    }
-
-    if (oldLine === undefined || newLine === undefined || patchLine.startsWith("\\")) {
-      continue;
-    }
-
-    if (patchLine.startsWith("+")) {
-      diffLines.push({ kind: "add", newLine });
-      newLine += 1;
-      continue;
-    }
-
-    if (patchLine.startsWith("-")) {
-      diffLines.push({ kind: "delete", oldLine });
-      oldLine += 1;
-      continue;
-    }
-
-    diffLines.push({ kind: "context", newLine, oldLine });
-    oldLine += 1;
-    newLine += 1;
-  }
-
-  return diffLines;
 }
 
 function matchPostedInlineComments(
@@ -657,6 +724,7 @@ function buildJsonOutput(
       dryRun: options.dryRun,
       findings: result.findings,
       model: options.model ?? null,
+      modelCalls: result.modelCalls,
       posted: options.posted,
       pullRequest: result.pullRequest,
       rejectedFindings: result.rejectedFindings,

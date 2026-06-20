@@ -7,6 +7,7 @@ import type {
   PullRequestMetadata,
 } from "@diffguard/github";
 import type { ReviewResult } from "@diffguard/reviewer";
+import type { LlmProvider } from "@diffguard/llm";
 
 import {
   buildMarkdownSummary,
@@ -464,6 +465,104 @@ describe("review command", () => {
     expect(storedRuns).toEqual([]);
   });
 
+  it("uses OPENAI_API_KEY to run the default pipeline through three LLM review passes without posting in dry-run", async () => {
+    const postedComments: PostPullRequestCommentInput[] = [];
+    const createdReviews: CreatePullRequestReviewInput[] = [];
+    const provider = createFakeLlmProvider([
+      {
+        findings: [
+          createFinding({
+            category: "logic",
+            title: "Changed null check can throw",
+          }),
+        ],
+      },
+      {
+        findings: [
+          createFinding({
+            category: "authorization",
+            title: "Admin route returns data before auth",
+          }),
+        ],
+      },
+      {
+        findings: [
+          createFinding({
+            category: "testing",
+            title: "Behavior change lacks regression coverage",
+          }),
+        ],
+      },
+    ]);
+    const dependencies = createDependencies({
+      createLlmProvider: () => provider,
+      createReview: async (input) => {
+        createdReviews.push(input);
+      },
+      env: {
+        GITHUB_TOKEN: "ghs_token",
+        OPENAI_API_KEY: "sk-test",
+      },
+      findingValidator: async () => ({
+        confidence: 0.96,
+        falsePositiveRisk: "low",
+        reason: "The changed-code evidence supports posting this candidate.",
+        shouldPost: true,
+        valid: true,
+      }),
+      postComment: async (input) => {
+        postedComments.push(input);
+      },
+      runReviewPipeline: undefined,
+      storeReviewRun: async () => undefined,
+    });
+
+    const result = await runReviewCommand(
+      {
+        dryRun: true,
+        minConfidence: 0.7,
+        model: "gpt-test-review",
+        output: "json",
+        owner: "acme",
+        pullNumber: 42,
+        repo: "widgets",
+      },
+      dependencies,
+    );
+
+    expect(provider.requests.map((request) => request.messages[0]?.content)).toEqual([
+      expect.stringContaining("Focus on logic bugs"),
+      expect.stringContaining("Focus on security bugs"),
+      expect.stringContaining("Focus on regression risks"),
+    ]);
+    expect(provider.requests.map((request) => request.model)).toEqual([
+      "gpt-test-review",
+      "gpt-test-review",
+      "gpt-test-review",
+    ]);
+    expect(result.reviewResult.findings.map((finding) => finding.title)).toEqual([
+      "Changed null check can throw",
+      "Admin route returns data before auth",
+      "Behavior change lacks regression coverage",
+    ]);
+    expect(result.reviewResult.modelCalls).toHaveLength(3);
+    expect(JSON.parse(result.output)).toMatchObject({
+      modelCalls: [
+        expect.objectContaining({
+          provider: "openai",
+          promptVersion: "review-v1",
+          status: "succeeded",
+          templateId: "logic-bugs",
+        }),
+        expect.objectContaining({ templateId: "security-bugs" }),
+        expect.objectContaining({ templateId: "regression-test-gaps" }),
+      ],
+      posted: false,
+    });
+    expect(createdReviews).toEqual([]);
+    expect(postedComments).toEqual([]);
+  });
+
   it("formats a low-noise markdown summary", () => {
     const summary = buildMarkdownSummary(createReviewResult(), {
       dryRun: true,
@@ -507,6 +606,14 @@ function createDependencies(
         },
       };
     },
+    getPullRequestMetadata: async () => ({
+      ok: true,
+      data: pullRequest,
+    }),
+    listPullRequestFiles: async () => ({
+      ok: true,
+      data: createReviewResult().context.files,
+    }),
     listPullRequestReviewComments: async () => ({
       ok: true,
       data: overrides.listReviewComments
@@ -546,6 +653,10 @@ function createDependencies(
         },
       };
     },
+    readDiffGuardRules: async () => ({
+      ok: true,
+      data: "Only comment when confidence is high.",
+    }),
   } as unknown as DiffGuardGitHubClient;
   const runReviewPipelineCalls: unknown[] = [];
 
@@ -623,6 +734,7 @@ function createReviewResult(
     },
     dryRun: true,
     findings,
+    modelCalls: [],
     pullRequest,
     rejectedFindings: [{ reason: "low_confidence", title: "Speculative issue" }],
     timings: [
@@ -652,5 +764,38 @@ function createFinding(overrides: Partial<ReviewResult["findings"][number]> = {}
     title: "Admin route misses authorization",
     whyItMatters: "Non-admin users could read private customer data.",
     ...overrides,
+  };
+}
+
+type FakeLlmOutput = {
+  findings: ReviewResult["findings"];
+};
+
+type CapturedLlmRequest = Parameters<LlmProvider["generateJson"]>[0];
+
+function createFakeLlmProvider(outputs: FakeLlmOutput[]): LlmProvider & {
+  requests: CapturedLlmRequest[];
+} {
+  const requests: CapturedLlmRequest[] = [];
+
+  return {
+    requests,
+    async generateJson(request) {
+      requests.push(request);
+      const output = outputs.shift();
+      if (output === undefined) {
+        throw new Error("Fake LLM provider has no queued output.");
+      }
+
+      return {
+        model: request.model,
+        output,
+        tokenUsage: {
+          inputTokens: 100,
+          outputTokens: 25,
+          totalTokens: 125,
+        },
+      };
+    },
   };
 }

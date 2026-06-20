@@ -75,6 +75,9 @@ importers:
       '@diffguard/github':
         specifier: workspace:*
         version: link:../../packages/github
+      '@diffguard/llm':
+        specifier: workspace:*
+        version: link:../../packages/llm
       '@diffguard/reviewer':
         specifier: workspace:*
         version: link:../../packages/reviewer

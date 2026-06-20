@@ -40,6 +40,7 @@ describe("createReviewProcessor", () => {
       },
       dryRun: false,
       findings: [],
+      modelCalls: [],
       pullRequest: {
         additions: 0,
         baseRef: "main",
@@ -145,6 +146,7 @@ describe("createReviewProcessor", () => {
       },
       dryRun: false,
       findings: [],
+      modelCalls: [],
       pullRequest: {
         additions: 1,
         baseRef: "main",

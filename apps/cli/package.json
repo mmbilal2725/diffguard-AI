@@ -16,6 +16,7 @@
     "@diffguard/database": "workspace:*",
     "@diffguard/evals": "workspace:*",
     "@diffguard/github": "workspace:*",
+    "@diffguard/llm": "workspace:*",
     "@diffguard/reviewer": "workspace:*",
     "@diffguard/shared": "workspace:*",
     "zod": "^3.24.1"

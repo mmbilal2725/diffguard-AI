@@ -72,6 +72,22 @@ export type ReviewerFindingCandidate = z.infer<typeof ReviewerFindingCandidateSc
 type StyleOnlyCategory = z.infer<typeof StyleOnlyCategorySchema>;
 export type FindingValidatorResult = z.infer<typeof FindingValidatorResultSchema>;
 
+export type ModelCallTelemetry = {
+  attempt: number;
+  costUsd: number;
+  latencyMs: number;
+  model: string;
+  promptVersion: string;
+  provider: string;
+  status: string;
+  templateId?: string;
+  tokenUsage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
+};
+
 export type ReviewPipelineGitHubClient = Pick<
   DiffGuardGitHubClient,
   "getPullRequestMetadata" | "listPullRequestFiles" | "readDiffGuardRules"
@@ -149,12 +165,17 @@ export type ReviewResult = {
   context: ReviewContext;
   dryRun: boolean;
   findings: ReviewFinding[];
+  modelCalls: ModelCallTelemetry[];
   pullRequest: PullRequestMetadata;
   rejectedFindings: RejectedFinding[];
   timings: StageTiming[];
 };
 
-export type LlmReviewer = (context: ReviewContext) => Promise<unknown[]>;
+export type LlmReviewerResult = {
+  findings: unknown[];
+  modelCalls?: ModelCallTelemetry[];
+};
+export type LlmReviewer = (context: ReviewContext) => Promise<unknown[] | LlmReviewerResult>;
 export type StaticCheckRunner = (context: ReviewContext) => Promise<unknown[]>;
 export type FindingValidatorInput = {
   context: ReviewContext;
@@ -265,15 +286,15 @@ export async function runReviewPipeline(input: RunReviewPipelineInput): Promise<
     (input.staticCheckRunner ?? runPlaceholderStaticChecks)(context),
   );
 
-  const llmCandidates = await recordStage(timings, "llm_review", async () =>
-    (input.llmReviewer ?? runPlaceholderLlmReviewer)(context),
+  const llmReview = await recordStage(timings, "llm_review", async () =>
+    normalizeLlmReviewerResult(await (input.llmReviewer ?? runPlaceholderLlmReviewer)(context)),
   );
 
   const { findings: validatedFindings, rejectedFindings: validationRejects } = await recordStage(
     timings,
     "validate_findings",
     async () => {
-      const parsed = validateReviewerFindings([...staticCandidates, ...llmCandidates]);
+      const parsed = validateReviewerFindings([...staticCandidates, ...llmReview.findings]);
       const validated = await validateFindingsWithValidator({
         candidates: parsed.findings,
         confidenceThreshold: parsedInput.confidenceThreshold,
@@ -305,6 +326,7 @@ export async function runReviewPipeline(input: RunReviewPipelineInput): Promise<
     context,
     dryRun: parsedInput.dryRun,
     findings,
+    modelCalls: llmReview.modelCalls,
     pullRequest,
     rejectedFindings: [...validationRejects, ...duplicateRejects, ...confidenceRejects],
     timings,
@@ -368,6 +390,23 @@ function validateReviewerFindings(candidates: unknown[]): {
   }
 
   return { findings, rejectedFindings };
+}
+
+function normalizeLlmReviewerResult(result: unknown[] | LlmReviewerResult): {
+  findings: unknown[];
+  modelCalls: ModelCallTelemetry[];
+} {
+  if (Array.isArray(result)) {
+    return {
+      findings: result,
+      modelCalls: [],
+    };
+  }
+
+  return {
+    findings: result.findings,
+    modelCalls: result.modelCalls ?? [],
+  };
 }
 
 async function validateFindingsWithValidator(input: {
