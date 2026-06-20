@@ -12,10 +12,14 @@ describe("createWorkerConfig", () => {
 
   it("accepts explicit Redis and queue settings", () => {
     const config = createWorkerConfig({
+      OPENAI_API_KEY: "sk-test",
+      OPENAI_RESOLUTION_MODEL: "gpt-5.5-mini",
       REDIS_URL: "redis://redis.example.test:6379",
       REVIEW_QUEUE_NAME: "custom-review-queue"
     });
 
+    expect(config.openaiApiKey).toBe("sk-test");
+    expect(config.openaiResolutionModel).toBe("gpt-5.5-mini");
     expect(config.redisUrl).toBe("redis://redis.example.test:6379");
     expect(config.queueName).toBe("custom-review-queue");
   });

@@ -20,6 +20,7 @@ The API automatically queues reviews for:
 - `pull_request.opened`
 - `pull_request.synchronize`
 - `pull_request.reopened`
+- `pull_request.closed` when the pull request was merged, stored internally as `pull_request.merged`
 - `issue_comment.created` when the comment body is exactly `/diffguard review` and the issue is a pull request
 
 ## Required Permissions

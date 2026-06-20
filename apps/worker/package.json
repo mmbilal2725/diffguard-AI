@@ -10,7 +10,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@diffguard/database": "workspace:*",
     "@diffguard/github": "workspace:*",
+    "@diffguard/llm": "workspace:*",
     "@diffguard/reviewer": "workspace:*",
     "@diffguard/shared": "workspace:*",
     "bullmq": "^5.34.1",

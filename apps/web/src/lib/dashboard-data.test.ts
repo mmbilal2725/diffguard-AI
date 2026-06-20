@@ -14,6 +14,10 @@ describe("dashboard data", () => {
 
     expect(metrics.totalPrsReviewed).toBe(186);
     expect(metrics.findingsPosted).toBe(341);
+    expect(metrics.resolvedFindings).toBe(245);
+    expect(metrics.unresolvedFindings).toBe(66);
+    expect(metrics.falsePositiveFindings).toBe(18);
+    expect(metrics.unknownFindings).toBe(12);
     expect(metrics.validatorRejectionRate).toBeCloseTo(0.34, 2);
     expect(metrics.estimatedResolutionRate).toBeCloseTo(0.72, 2);
     expect(metrics.totalCostUsd).toBeCloseTo(128.44, 2);

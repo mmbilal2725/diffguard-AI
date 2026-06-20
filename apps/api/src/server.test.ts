@@ -172,6 +172,78 @@ describe("buildApiServer", () => {
     await server.close();
   });
 
+  it("enqueues a review for merged pull_request events", async () => {
+    const dependencies = createWebhookDependencies();
+    const server = buildApiServer({
+      reviewQueue: dependencies.reviewQueue,
+      store: dependencies.store,
+      webhookSecret: WEBHOOK_SECRET,
+    });
+    const payload = JSON.stringify(createPullRequestPayload("closed", { merged: true }));
+
+    const response = await server.inject({
+      headers: signedHeaders({
+        deliveryId: "delivery-merged",
+        eventName: "pull_request",
+        payload,
+      }),
+      method: "POST",
+      payload,
+      url: "/webhooks/github",
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({ reviewRunId: "review_run_1", status: "queued" });
+    expect(dependencies.store.upsertPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "MERGED",
+      }),
+    );
+    expect(dependencies.store.createReviewRun).toHaveBeenCalledWith({
+      pullRequestId: "pull_request_1",
+      trigger: "pull_request.merged",
+    });
+    expect(dependencies.reviewQueue.add).toHaveBeenCalledWith(
+      "review-pr",
+      expect.objectContaining({
+        deliveryId: "delivery-merged",
+        trigger: "pull_request.merged",
+      }),
+      expect.objectContaining({
+        jobId: "delivery-merged:review_run_1",
+      }),
+    );
+
+    await server.close();
+  });
+
+  it("ignores closed pull_request events that were not merged", async () => {
+    const dependencies = createWebhookDependencies();
+    const server = buildApiServer({
+      reviewQueue: dependencies.reviewQueue,
+      store: dependencies.store,
+      webhookSecret: WEBHOOK_SECRET,
+    });
+    const payload = JSON.stringify(createPullRequestPayload("closed", { merged: false }));
+
+    const response = await server.inject({
+      headers: signedHeaders({
+        deliveryId: "delivery-closed",
+        eventName: "pull_request",
+        payload,
+      }),
+      method: "POST",
+      payload,
+      url: "/webhooks/github",
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({ status: "ignored" });
+    expect(dependencies.reviewQueue.add).not.toHaveBeenCalled();
+
+    await server.close();
+  });
+
   it("ignores duplicate webhook deliveries", async () => {
     const dependencies = createWebhookDependencies();
     const server = buildApiServer({
@@ -289,7 +361,10 @@ function createWebhookDependencies() {
   };
 }
 
-function createPullRequestPayload(action: "opened" | "reopened" | "synchronize") {
+function createPullRequestPayload(
+  action: "closed" | "opened" | "reopened" | "synchronize",
+  overrides: { merged?: boolean } = {},
+) {
   return {
     action,
     installation: {
@@ -302,8 +377,9 @@ function createPullRequestPayload(action: "opened" | "reopened" | "synchronize")
       head: {
         sha: "head-sha",
       },
+      merged: overrides.merged ?? false,
       number: 42,
-      state: "open",
+      state: action === "closed" ? "closed" : "open",
       title: "Fix checkout",
       user: {
         login: "octocat",

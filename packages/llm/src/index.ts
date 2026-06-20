@@ -4,6 +4,7 @@ import { z } from "zod";
 
 export const REVIEW_PROMPT_VERSION = "review-v1";
 export const VALIDATOR_PROMPT_VERSION = "validator-v1";
+export const RESOLUTION_VALIDATOR_PROMPT_VERSION = "resolution-validator-v1";
 export const DEFAULT_OPENAI_REVIEW_MODEL = "gpt-5.5";
 
 export const ReviewFindingOutputSchema = z
@@ -112,6 +113,36 @@ export const REVIEW_FINDING_JSON_SCHEMA = {
   type: "object",
 } as const;
 
+export const RESOLUTION_STATUS_JSON_SCHEMA = {
+  additionalProperties: false,
+  properties: {
+    confidence: {
+      maximum: 1,
+      minimum: 0,
+      type: "number",
+    },
+    reason: {
+      maxLength: 2000,
+      minLength: 20,
+      type: "string",
+    },
+    status: {
+      enum: ["resolved", "unresolved", "false_positive", "unknown"],
+      type: "string",
+    },
+  },
+  required: ["status", "confidence", "reason"],
+  type: "object",
+} as const;
+
+const ResolutionValidatorOutputSchema = z
+  .object({
+    confidence: z.number().min(0).max(1),
+    reason: z.string().min(20).max(2000),
+    status: z.enum(["resolved", "unresolved", "false_positive", "unknown"]),
+  })
+  .strict();
+
 export type ReviewPromptInput = {
   context?: string[];
   diff: string;
@@ -177,8 +208,8 @@ export type TokenUsage = {
 export type LlmProviderRequest = {
   messages: LlmMessage[];
   model: string;
-  responseSchema: typeof REVIEW_FINDING_JSON_SCHEMA;
-  responseSchemaName: "diffguard_review_findings";
+  responseSchema: typeof REVIEW_FINDING_JSON_SCHEMA | typeof RESOLUTION_STATUS_JSON_SCHEMA;
+  responseSchemaName: "diffguard_review_findings" | "diffguard_resolution_status";
   temperature?: number;
 };
 
@@ -268,7 +299,7 @@ type OpenAIChatCompletionRequest = {
   response_format: {
     json_schema: {
       name: string;
-      schema: typeof REVIEW_FINDING_JSON_SCHEMA;
+      schema: typeof REVIEW_FINDING_JSON_SCHEMA | typeof RESOLUTION_STATUS_JSON_SCHEMA;
       strict: true;
     };
     type: "json_schema";
@@ -372,6 +403,7 @@ export async function reviewDiffWithLlm(
         input,
         latencyMs: Date.now() - startedAtMs,
         model: input.model ?? DEFAULT_OPENAI_REVIEW_MODEL,
+        promptVersion: REVIEW_PROMPT_VERSION,
         status: "failed",
         tokenUsage: emptyTokenUsage(),
       });
@@ -386,6 +418,7 @@ export async function reviewDiffWithLlm(
       input,
       latencyMs: Date.now() - startedAtMs,
       model: providerResponse.model,
+      promptVersion: REVIEW_PROMPT_VERSION,
       status: parsed.success ? "succeeded" : "invalid_output",
       tokenUsage: providerResponse.tokenUsage,
     });
@@ -409,6 +442,94 @@ export async function reviewDiffWithLlm(
   }
 
   throw new LlmValidationError([], modelCalls);
+}
+
+export type ResolutionFindingInput = {
+  category: string;
+  confidence: number;
+  evidence: string;
+  filePath: string;
+  githubCommentId: string;
+  id: string;
+  line: number;
+  severity: string;
+  side: "LEFT" | "RIGHT";
+  summary: string;
+  suggestedFix?: string;
+  title: string;
+  whyItMatters: string;
+};
+
+export type ValidateFindingResolutionWithLlmInput = {
+  finding: ResolutionFindingInput;
+  latestCodeContext: string[];
+  latestDiff: string;
+  model?: string;
+  onModelCall?: (call: ModelCallLog) => void;
+  pricing?: TokenPricing;
+  provider: LlmProvider;
+  providerName?: string;
+};
+
+export type ValidateFindingResolutionWithLlmResult = z.infer<
+  typeof ResolutionValidatorOutputSchema
+> & {
+  modelCalls: ModelCallLog[];
+  promptVersion: typeof RESOLUTION_VALIDATOR_PROMPT_VERSION;
+};
+
+export async function validateFindingResolutionWithLlm(
+  input: ValidateFindingResolutionWithLlmInput,
+): Promise<ValidateFindingResolutionWithLlmResult> {
+  const startedAtMs = Date.now();
+  const modelCalls: ModelCallLog[] = [];
+
+  let providerResponse: LlmProviderResponse;
+  try {
+    providerResponse = await input.provider.generateJson({
+      messages: buildResolutionValidatorMessages(input),
+      model: input.model ?? DEFAULT_OPENAI_REVIEW_MODEL,
+      responseSchema: RESOLUTION_STATUS_JSON_SCHEMA,
+      responseSchemaName: "diffguard_resolution_status",
+      temperature: 0,
+    });
+  } catch (error) {
+    const call = createModelCallLog({
+      attempt: 1,
+      input,
+      latencyMs: Date.now() - startedAtMs,
+      model: input.model ?? DEFAULT_OPENAI_REVIEW_MODEL,
+      promptVersion: RESOLUTION_VALIDATOR_PROMPT_VERSION,
+      status: "failed",
+      tokenUsage: emptyTokenUsage(),
+    });
+    modelCalls.push(call);
+    input.onModelCall?.(call);
+    throw error;
+  }
+
+  const parsed = ResolutionValidatorOutputSchema.safeParse(providerResponse.output);
+  const call = createModelCallLog({
+    attempt: 1,
+    input,
+    latencyMs: Date.now() - startedAtMs,
+    model: providerResponse.model,
+    promptVersion: RESOLUTION_VALIDATOR_PROMPT_VERSION,
+    status: parsed.success ? "succeeded" : "invalid_output",
+    tokenUsage: providerResponse.tokenUsage,
+  });
+  modelCalls.push(call);
+  input.onModelCall?.(call);
+
+  if (!parsed.success) {
+    throw new LlmValidationError(toValidationIssues(parsed.error), modelCalls);
+  }
+
+  return {
+    ...parsed.data,
+    modelCalls,
+    promptVersion: RESOLUTION_VALIDATOR_PROMPT_VERSION,
+  };
 }
 
 function buildPromptMessages(
@@ -469,6 +590,7 @@ function createModelCallLog(input: {
   input: Pick<ReviewDiffWithLlmInput, "pricing" | "providerName">;
   latencyMs: number;
   model: string;
+  promptVersion: string;
   status: ModelCallStatus;
   tokenUsage: TokenUsage;
 }): ModelCallLog {
@@ -477,11 +599,46 @@ function createModelCallLog(input: {
     costUsd: calculateCost(input.tokenUsage, input.input.pricing),
     latencyMs: input.latencyMs,
     model: input.model,
-    promptVersion: REVIEW_PROMPT_VERSION,
+    promptVersion: input.promptVersion,
     provider: input.input.providerName ?? "unknown",
     status: input.status,
     tokenUsage: input.tokenUsage,
   };
+}
+
+function buildResolutionValidatorMessages(input: ValidateFindingResolutionWithLlmInput): LlmMessage[] {
+  return [
+    {
+      content: [
+        "Classify whether the original DiffGuard-AI finding is now resolved in the latest pull request code.",
+        "Return only structured JSON that matches the provided schema.",
+        "Use resolved only when the latest evidence clearly fixes the issue.",
+        "Use unresolved when the issue still appears present.",
+        "Use false_positive when the original claim appears unsupported by the current evidence.",
+        "Use unknown when evidence is insufficient.",
+      ].join("\n"),
+      role: "system",
+    },
+    {
+      content: buildResolutionValidatorUserMessage(input),
+      role: "user",
+    },
+  ];
+}
+
+function buildResolutionValidatorUserMessage(input: ValidateFindingResolutionWithLlmInput): string {
+  return [
+    "Original finding:",
+    JSON.stringify(input.finding, null, 2),
+    "",
+    "Latest code context:",
+    input.latestCodeContext.length > 0
+      ? input.latestCodeContext.join("\n\n")
+      : "No latest code context was available.",
+    "",
+    "Latest pull request diff:",
+    input.latestDiff.trim().length > 0 ? input.latestDiff : "No latest diff was available.",
+  ].join("\n");
 }
 
 function calculateCost(usage: TokenUsage, pricing: TokenPricing | undefined): number {

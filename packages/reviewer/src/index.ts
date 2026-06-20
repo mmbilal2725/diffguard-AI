@@ -16,6 +16,19 @@ import {
 } from "@diffguard/shared";
 import { z } from "zod";
 
+export {
+  ResolutionStatusSchema,
+  calculateResolutionMetrics,
+  trackFindingResolutions,
+  type FindingResolutionResult,
+  type ResolutionMetrics,
+  type ResolutionStatus,
+  type ResolutionValidator,
+  type ResolutionValidatorInput,
+  type ResolutionValidatorResult,
+  type StoredPostedFinding,
+} from "./resolution-tracker.js";
+
 const MINIMUM_POSTABLE_CONFIDENCE = 0.7;
 const DIFFGUARD_RULES_PATH = ".diffguard-rules.md";
 

@@ -1,4 +1,4 @@
-import { Activity, GitPullRequest, MessageSquare, Timer, Wallet, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, HelpCircle, MessageSquare, XCircle } from "lucide-react";
 import Link from "next/link";
 
 import { CostLatencyChart, ReviewTrendChart } from "@/components/dashboard/charts";
@@ -38,40 +38,40 @@ export default function DashboardPage(): React.ReactElement {
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3" aria-label="Overview metrics">
         <MetricCard
-          title="Total PRs reviewed"
-          value={String(metrics.totalPrsReviewed)}
-          detail="Pull requests processed across connected repositories"
-          icon={GitPullRequest}
-        />
-        <MetricCard
-          title="Findings posted"
+          title="Posted findings"
           value={String(metrics.findingsPosted)}
-          detail="Validator-approved GitHub review comments"
+          detail="Validator-approved GitHub review comments stored for tracking"
           icon={MessageSquare}
         />
         <MetricCard
-          title="Validator rejection rate"
-          value={formatPercent(metrics.validatorRejectionRate)}
-          detail="Candidate findings blocked before posting"
+          title="Resolved findings"
+          value={String(metrics.resolvedFindings)}
+          detail="Posted findings likely fixed in a later PR update"
+          icon={CheckCircle2}
+        />
+        <MetricCard
+          title="Unresolved findings"
+          value={String(metrics.unresolvedFindings)}
+          detail="Posted findings that still appear present"
+          icon={AlertTriangle}
+        />
+        <MetricCard
+          title="False positives"
+          value={String(metrics.falsePositiveFindings)}
+          detail="Posted findings later judged likely unsupported"
           icon={XCircle}
+        />
+        <MetricCard
+          title="Unknown"
+          value={String(metrics.unknownFindings)}
+          detail="Findings without enough latest evidence to classify"
+          icon={HelpCircle}
         />
         <MetricCard
           title="Estimated resolution rate"
           value={formatPercent(metrics.estimatedResolutionRate)}
-          detail="Posted findings likely fixed or acknowledged"
+          detail="Resolved findings divided by posted findings"
           icon={Activity}
-        />
-        <MetricCard
-          title="Review cost"
-          value={formatCurrency(metrics.totalCostUsd)}
-          detail="Estimated model cost for the current window"
-          icon={Wallet}
-        />
-        <MetricCard
-          title="Average latency"
-          value={formatDuration(metrics.averageLatencySeconds)}
-          detail="Median-sized pull request from webhook to completion"
-          icon={Timer}
         />
       </section>
 

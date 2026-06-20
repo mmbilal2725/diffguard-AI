@@ -1,7 +1,7 @@
 import { type ReviewTrigger } from "@diffguard/shared";
 import { z } from "zod";
 
-const SupportedPullRequestActionSchema = z.enum(["opened", "reopened", "synchronize"]);
+const SupportedPullRequestActionSchema = z.enum(["closed", "opened", "reopened", "synchronize"]);
 const ManualReviewCommand = "/diffguard review";
 
 const RepositorySchema = z.object({
@@ -26,6 +26,7 @@ const PullRequestPayloadSchema = z.object({
     head: z.object({
       sha: z.string().min(1),
     }),
+    merged: z.boolean().optional().default(false),
     number: z.number().int().positive(),
     state: z.string().min(1),
     title: z.string().min(1),
@@ -68,7 +69,7 @@ export type ReviewWebhookRequest = {
   owner: string;
   pullNumber: number;
   pullRequestAuthorLogin?: string;
-  pullRequestStatus: "CLOSED" | "OPEN";
+  pullRequestStatus: "CLOSED" | "MERGED" | "OPEN";
   pullRequestTitle: string;
   repo: string;
   trigger: ReviewTrigger;
@@ -107,6 +108,10 @@ function readPullRequestReviewRequest(payload: unknown): ReviewWebhookRequest | 
   if (!parsed.success) {
     return null;
   }
+  const trigger = readPullRequestTrigger(parsed.data.action, parsed.data.pull_request.merged);
+  if (trigger === null) {
+    return null;
+  }
 
   return {
     baseSha: parsed.data.pull_request.base.sha,
@@ -116,10 +121,13 @@ function readPullRequestReviewRequest(payload: unknown): ReviewWebhookRequest | 
     owner: parsed.data.repository.owner.login,
     pullNumber: parsed.data.pull_request.number,
     pullRequestAuthorLogin: parsed.data.pull_request.user?.login,
-    pullRequestStatus: mapPullRequestStatus(parsed.data.pull_request.state),
+    pullRequestStatus: mapPullRequestStatus(
+      parsed.data.pull_request.state,
+      parsed.data.pull_request.merged,
+    ),
     pullRequestTitle: parsed.data.pull_request.title,
     repo: parsed.data.repository.name,
-    trigger: `pull_request.${parsed.data.action}`,
+    trigger,
   };
 }
 
@@ -150,6 +158,21 @@ function readManualReviewRequest(payload: unknown): ReviewWebhookRequest | null 
   };
 }
 
-function mapPullRequestStatus(state: string): "CLOSED" | "OPEN" {
+function readPullRequestTrigger(
+  action: z.infer<typeof SupportedPullRequestActionSchema>,
+  merged: boolean,
+): ReviewTrigger | null {
+  if (action === "closed") {
+    return merged ? "pull_request.merged" : null;
+  }
+
+  return `pull_request.${action}`;
+}
+
+function mapPullRequestStatus(state: string, merged = false): "CLOSED" | "MERGED" | "OPEN" {
+  if (merged) {
+    return "MERGED";
+  }
+
   return state.toLowerCase() === "closed" ? "CLOSED" : "OPEN";
 }

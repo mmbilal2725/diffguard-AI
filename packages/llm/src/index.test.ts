@@ -4,8 +4,10 @@ import {
   LlmValidationError,
   REVIEW_PROMPT_VERSION,
   REVIEW_PROMPT_TEMPLATES,
+  RESOLUTION_VALIDATOR_PROMPT_VERSION,
   createReviewPromptInput,
   reviewDiffWithLlm,
+  validateFindingResolutionWithLlm,
   type LlmProvider,
 } from "./index.js";
 
@@ -136,6 +138,53 @@ describe("reviewDiffWithLlm", () => {
         templateId: "logic-bugs",
       }),
     ).rejects.toBeInstanceOf(LlmValidationError);
+  });
+});
+
+describe("validateFindingResolutionWithLlm", () => {
+  it("uses a versioned validator prompt and validates resolution status output", async () => {
+    const provider = createFakeProvider([
+      {
+        output: {
+          confidence: 0.93,
+          reason: "The latest code now performs the required authorization check first.",
+          status: "resolved",
+        },
+      },
+    ]);
+
+    const result = await validateFindingResolutionWithLlm({
+      finding: {
+        category: "authorization",
+        confidence: 0.94,
+        evidence: "The original diff returned customer data before requireAdmin() ran.",
+        filePath: "src/admin.ts",
+        githubCommentId: "901",
+        id: "finding_1",
+        line: 12,
+        severity: "high",
+        side: "RIGHT",
+        summary: "The admin route returns customer data before checking admin access.",
+        suggestedFix: "Move requireAdmin() before the customer lookup.",
+        title: "Admin route misses authorization",
+        whyItMatters: "Non-admin users could read private customer data.",
+      },
+      latestCodeContext: ["File: src/admin.ts\nPatch:\n+requireAdmin(user);"],
+      latestDiff: "diff --git a/src/admin.ts b/src/admin.ts\n+requireAdmin(user);",
+      provider,
+      providerName: "fake",
+    });
+
+    expect(result.status).toBe("resolved");
+    expect(result.modelCalls[0]).toMatchObject({
+      promptVersion: RESOLUTION_VALIDATOR_PROMPT_VERSION,
+      provider: "fake",
+      status: "succeeded",
+    });
+    expect(provider.requests[0]?.responseSchemaName).toBe("diffguard_resolution_status");
+    expect(provider.requests[0]?.messages[0]?.content).toContain(
+      "Classify whether the original DiffGuard-AI finding is now resolved",
+    );
   });
 });
 

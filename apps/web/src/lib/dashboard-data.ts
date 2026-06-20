@@ -73,6 +73,10 @@ export interface EvalRun {
 export interface DashboardMetrics {
   totalPrsReviewed: number;
   findingsPosted: number;
+  resolvedFindings: number;
+  unresolvedFindings: number;
+  falsePositiveFindings: number;
+  unknownFindings: number;
   validatorRejectionRate: number;
   estimatedResolutionRate: number;
   totalCostUsd: number;
@@ -84,6 +88,9 @@ const overviewSnapshot = {
   validatorAccepted: 341,
   validatorRejected: 176,
   resolvedFindings: 245,
+  unresolvedFindings: 66,
+  falsePositiveFindings: 18,
+  unknownFindings: 12,
   totalCostUsd: 128.44,
   latencySamplesSeconds: [42, 51, 47, 56, 44]
 };
@@ -432,6 +439,10 @@ export function getDashboardMetrics(): DashboardMetrics {
   return {
     totalPrsReviewed: overviewSnapshot.totalPrsReviewed,
     findingsPosted: overviewSnapshot.validatorAccepted,
+    resolvedFindings: overviewSnapshot.resolvedFindings,
+    unresolvedFindings: overviewSnapshot.unresolvedFindings,
+    falsePositiveFindings: overviewSnapshot.falsePositiveFindings,
+    unknownFindings: overviewSnapshot.unknownFindings,
     validatorRejectionRate: overviewSnapshot.validatorRejected / totalValidatorDecisions,
     estimatedResolutionRate: overviewSnapshot.resolvedFindings / overviewSnapshot.validatorAccepted,
     totalCostUsd: overviewSnapshot.totalCostUsd,

@@ -51,7 +51,9 @@ enum FindingStatus {
   POSTED
   DISMISSED
   RESOLVED
+  UNRESOLVED
   FALSE_POSITIVE
+  UNKNOWN
 }
 
 enum ModelCallStatus {

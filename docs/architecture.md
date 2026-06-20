@@ -14,12 +14,13 @@ DiffGuard-AI is organized as a pnpm TypeScript monorepo with deployable apps and
   files, raw diffs, repository file reads, `.diffguard-rules.md`, general PR comments,
   inline pull request reviews, and review-comment ID lookup. Methods validate inputs
   with Zod and return structured result objects instead of exposing raw Octokit errors.
-- `packages/reviewer`: Review pipeline orchestration boundary.
+- `packages/reviewer`: Review pipeline orchestration boundary, including resolution
+  tracking for previously posted findings.
 - `packages/llm`: Prompt versions, model client boundary, and structured output schemas.
   The package exposes provider interfaces, an OpenAI implementation, versioned review
-  prompts, retry-on-invalid-output handling, and model-call telemetry for token usage,
-  cost, latency, model name, and prompt version. Callers receive only Zod-validated
-  `ReviewFinding` objects.
+  prompts, resolution validator prompts, retry-on-invalid-output handling, and
+  model-call telemetry for token usage, cost, latency, model name, and prompt version.
+  Callers receive only Zod-validated structured objects.
 - `packages/evals`: Zod-validated PR diff eval case format, starter TypeScript bug cases,
   eval runner, scoring metrics, and JSON/Markdown report formatting for CI.
 - `packages/database`: Prisma schema and database client factory.
@@ -42,6 +43,18 @@ The full AI review workflow is intentionally not implemented in the scaffold. Th
 11. Inline-capable findings are batched into one GitHub review; unmapped findings use
     a summary issue comment fallback.
 12. Metrics, GitHub comment IDs, and feedback events are stored for quality tracking.
+
+## Resolution Tracking
+
+DiffGuard-AI stores posted findings with their GitHub comment IDs. On later PR updates
+or merge-oriented review jobs, the worker can load those posted findings, use the latest
+PR files/diff as evidence, and ask the structured resolution validator model to classify
+each finding as `resolved`, `unresolved`, `false_positive`, or `unknown`.
+
+Resolution rate is reported as `resolved findings / posted findings`. This is an
+approximation, not perfect ground truth. It depends on the available latest diff/code
+context and model judgment. When the latest evidence is insufficient, the classifier
+must return `unknown` instead of guessing.
 
 ## Eval Runner
 

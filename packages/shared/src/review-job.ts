@@ -6,6 +6,7 @@ export const ReviewTriggerSchema = z.enum([
   "pull_request.opened",
   "pull_request.reopened",
   "pull_request.synchronize",
+  "pull_request.merged",
   "issue_comment.diffguard_review",
 ]);
 

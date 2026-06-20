@@ -17,7 +17,7 @@ export type PullRequestWebhookInput = {
   headSha?: string;
   number: number;
   repositoryId: string;
-  status: "CLOSED" | "OPEN";
+  status: "CLOSED" | "MERGED" | "OPEN";
   title: string;
 };
 

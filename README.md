@@ -105,4 +105,7 @@ GITHUB_APP_ID=""
 GITHUB_APP_PRIVATE_KEY=""
 GITHUB_WEBHOOK_SECRET=""
 OPENAI_API_KEY=""
+OPENAI_RESOLUTION_MODEL=""
 ```
+
+Resolution tracking classifies previously posted findings as resolved, unresolved, likely false positive, or unknown after later PR updates. The dashboard's estimated resolution rate is `resolved findings / posted findings`; treat it as an approximation from available code evidence and validator-model judgment, not perfect ground truth.
