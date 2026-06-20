@@ -1,4 +1,11 @@
-import { createGitHubClient, type DiffGuardGitHubClient, type GitHubResult } from "@diffguard/github";
+import {
+  createGitHubClient,
+  type DiffGuardGitHubClient,
+  type GitHubResult,
+  type PullRequestFile,
+  type PullRequestRef,
+  type ReviewCommentInput,
+} from "@diffguard/github";
 import {
   runReviewPipeline,
   type RejectedFinding,
@@ -35,14 +42,23 @@ export type ReviewCommandResult = {
 export type StoreReviewRunInput = {
   model?: string;
   posted: boolean;
+  postedFindings?: PostedReviewFinding[];
   result: ReviewResult;
 };
 
 export type ReviewCommandDependencies = {
   createGitHubClient?: (config: { authToken: string }) => DiffGuardGitHubClient;
   env?: Record<string, string | undefined>;
+  loadPostedFindingDedupeKeys?: (input: PullRequestRef) => Promise<Set<string>>;
   runReviewPipeline?: (input: RunReviewPipelineInput) => Promise<ReviewResult>;
   storeReviewRun?: (input: StoreReviewRunInput) => Promise<void>;
+};
+
+export type PostedReviewFinding = {
+  dedupeKey: string;
+  githubCommentId: string;
+  line: number;
+  path: string;
 };
 
 type ParsedArgValue = boolean | number | string | undefined;
@@ -69,6 +85,7 @@ type PrismaClientLike = {
         dedupeKey: string;
         evidence: string;
         filePath: string;
+        githubCommentId?: string;
         line: number;
         relatedRuleIds: string[];
         reviewRunId: string;
@@ -82,6 +99,25 @@ type PrismaClientLike = {
       }>;
       skipDuplicates: boolean;
     }): Promise<unknown>;
+    findMany(input: {
+      select: {
+        dedupeKey: true;
+      };
+      where: {
+        githubCommentId: {
+          not: null;
+        };
+        reviewRun: {
+          pullRequest: {
+            number: number;
+            repository: {
+              name: string;
+              owner: string;
+            };
+          };
+        };
+      };
+    }): Promise<Array<{ dedupeKey: string }>>;
   };
   pullRequest: {
     upsert(input: {
@@ -188,7 +224,21 @@ export async function runReviewCommand(
     pullNumber: options.pullNumber,
     repo: options.repo,
   });
-  const reviewResult = limitFindings(rawReviewResult, options.maxFindings);
+  const ref = {
+    number: options.pullNumber,
+    owner: options.owner,
+    repo: options.repo,
+  };
+  const postedDedupeKeys =
+    options.dryRun || env.DATABASE_URL === undefined || env.DATABASE_URL.trim() === ""
+      ? new Set<string>()
+      : await (dependencies.loadPostedFindingDedupeKeys ?? loadPostedFindingDedupeKeysFromDatabase)(
+          ref,
+        );
+  const reviewResult = limitFindings(
+    filterPreviouslyPostedFindings(rawReviewResult, postedDedupeKeys),
+    options.maxFindings,
+  );
   const summary = buildMarkdownSummary(reviewResult, {
     dryRun: options.dryRun,
     maxFindings: options.maxFindings,
@@ -196,25 +246,29 @@ export async function runReviewCommand(
     model: options.model,
   });
   let posted = false;
+  let postedFindings: PostedReviewFinding[] = [];
 
   if (!options.dryRun) {
-    unwrapGitHubResult(
-      await githubClient.postPullRequestComment({
-        body: summary,
-        ref: {
-          number: options.pullNumber,
-          owner: options.owner,
-          repo: options.repo,
-        },
-      }),
-      "Failed to post pull request summary comment.",
-    );
-    posted = true;
+    const postingResult = await postReviewFindings({
+      githubClient,
+      ref,
+      result: reviewResult,
+      summary,
+      summaryOptions: {
+        dryRun: options.dryRun,
+        maxFindings: options.maxFindings,
+        minConfidence: options.minConfidence,
+        model: options.model,
+      },
+    });
+
+    posted = postingResult.posted;
+    postedFindings = postingResult.postedFindings;
   }
 
   if (env.DATABASE_URL !== undefined && env.DATABASE_URL.trim() !== "") {
     const storeReviewRun = dependencies.storeReviewRun ?? storeReviewRunInDatabase;
-    await storeReviewRun({ model: options.model, posted, result: reviewResult });
+    await storeReviewRun({ model: options.model, posted, postedFindings, result: reviewResult });
   }
 
   return {
@@ -327,6 +381,252 @@ function limitFindings(result: ReviewResult, maxFindings: number | undefined): R
   };
 }
 
+function filterPreviouslyPostedFindings(
+  result: ReviewResult,
+  postedDedupeKeys: Set<string>,
+): ReviewResult {
+  if (postedDedupeKeys.size === 0) {
+    return result;
+  }
+
+  return {
+    ...result,
+    findings: result.findings.filter(
+      (finding) => !postedDedupeKeys.has(buildFindingDedupeKey(finding)),
+    ),
+  };
+}
+
+async function postReviewFindings(input: {
+  githubClient: DiffGuardGitHubClient;
+  ref: PullRequestRef;
+  result: ReviewResult;
+  summary: string;
+  summaryOptions: {
+    dryRun: boolean;
+    maxFindings?: number;
+    minConfidence: number;
+    model?: string;
+  };
+}): Promise<{ posted: boolean; postedFindings: PostedReviewFinding[] }> {
+  const planned = planReviewPosting(input.result);
+  const postedFindings: PostedReviewFinding[] = [];
+
+  if (planned.inline.length > 0) {
+    const review = unwrapGitHubResult(
+      await input.githubClient.createPullRequestReview({
+        body: input.summary,
+        comments: planned.inline.map((comment) => comment.comment),
+        event: "COMMENT",
+        ref: input.ref,
+      }),
+      "Failed to create pull request review.",
+    );
+    const reviewComments = unwrapGitHubResult(
+      await input.githubClient.listPullRequestReviewComments({
+        ref: input.ref,
+        reviewId: review.id,
+      }),
+      "Failed to list pull request review comments.",
+    );
+
+    postedFindings.push(...matchPostedInlineComments(planned.inline, reviewComments));
+  }
+
+  if (planned.fallback.length > 0) {
+    const fallbackSummary = buildMarkdownSummary(
+      { ...input.result, findings: planned.fallback.map((plannedFinding) => plannedFinding.finding) },
+      input.summaryOptions,
+    );
+    const comment = unwrapGitHubResult(
+      await input.githubClient.postPullRequestComment({
+        body: fallbackSummary,
+        ref: input.ref,
+      }),
+      "Failed to post pull request summary comment.",
+    );
+
+    postedFindings.push(
+      ...planned.fallback.map((plannedFinding) => ({
+        dedupeKey: buildFindingDedupeKey(plannedFinding.finding),
+        githubCommentId: String(comment.id),
+        line: plannedFinding.finding.line,
+        path: plannedFinding.finding.filePath,
+      })),
+    );
+  }
+
+  return {
+    posted: planned.inline.length > 0 || planned.fallback.length > 0,
+    postedFindings,
+  };
+}
+
+function planReviewPosting(result: ReviewResult): {
+  fallback: Array<{ finding: ReviewFinding }>;
+  inline: Array<{ comment: ReviewCommentInput; finding: ReviewFinding }>;
+} {
+  const fallback: Array<{ finding: ReviewFinding }> = [];
+  const inline: Array<{ comment: ReviewCommentInput; finding: ReviewFinding }> = [];
+
+  for (const finding of result.findings) {
+    const mapped = mapFindingToReviewComment(result.context.files, finding);
+
+    if (mapped.kind === "mapped") {
+      inline.push({
+        comment: {
+          body: finding.improvedComment ?? finding.summary,
+          line: mapped.line,
+          path: mapped.path,
+          side: mapped.side,
+        },
+        finding,
+      });
+      continue;
+    }
+
+    if (mapped.kind === "unmapped") {
+      fallback.push({ finding });
+    }
+  }
+
+  return { fallback, inline };
+}
+
+function mapFindingToReviewComment(
+  files: PullRequestFile[],
+  finding: ReviewFinding,
+):
+  | {
+      kind: "deleted";
+    }
+  | {
+      kind: "mapped";
+      line: number;
+      path: string;
+      side: "LEFT" | "RIGHT";
+    }
+  | {
+      kind: "unmapped";
+    } {
+  const file = files.find(
+    (changedFile) =>
+      changedFile.filename === finding.filePath || changedFile.previousFilename === finding.filePath,
+  );
+
+  if (file === undefined || file.patch === undefined) {
+    return { kind: "unmapped" };
+  }
+
+  if (file.status === "removed" || file.status === "deleted") {
+    return { kind: "deleted" };
+  }
+
+  const diffLines = parsePatchLines(file.patch);
+  const lineIsInDiff = diffLines.some((line) => {
+    if (finding.side === "RIGHT") {
+      return line.newLine === finding.line && line.kind !== "delete";
+    }
+
+    return line.oldLine === finding.line && line.kind !== "add";
+  });
+
+  if (!lineIsInDiff) {
+    return { kind: "unmapped" };
+  }
+
+  return {
+    kind: "mapped",
+    line: finding.line,
+    path: file.filename,
+    side: finding.side,
+  };
+}
+
+function parsePatchLines(
+  patch: string,
+): Array<{ kind: "add" | "context" | "delete"; newLine?: number; oldLine?: number }> {
+  const diffLines: Array<{ kind: "add" | "context" | "delete"; newLine?: number; oldLine?: number }> =
+    [];
+  let oldLine: number | undefined;
+  let newLine: number | undefined;
+
+  for (const patchLine of patch.split("\n")) {
+    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(patchLine);
+    if (hunk !== null) {
+      oldLine = Number.parseInt(hunk[1] ?? "0", 10);
+      newLine = Number.parseInt(hunk[2] ?? "0", 10);
+      continue;
+    }
+
+    if (oldLine === undefined || newLine === undefined || patchLine.startsWith("\\")) {
+      continue;
+    }
+
+    if (patchLine.startsWith("+")) {
+      diffLines.push({ kind: "add", newLine });
+      newLine += 1;
+      continue;
+    }
+
+    if (patchLine.startsWith("-")) {
+      diffLines.push({ kind: "delete", oldLine });
+      oldLine += 1;
+      continue;
+    }
+
+    diffLines.push({ kind: "context", newLine, oldLine });
+    oldLine += 1;
+    newLine += 1;
+  }
+
+  return diffLines;
+}
+
+function matchPostedInlineComments(
+  plannedComments: Array<{ comment: ReviewCommentInput; finding: ReviewFinding }>,
+  reviewComments: Array<{
+    body?: string;
+    id: number;
+    line?: number;
+    path: string;
+    side?: "LEFT" | "RIGHT";
+  }>,
+): PostedReviewFinding[] {
+  const matchedCommentIndexes = new Set<number>();
+  const postedFindings: PostedReviewFinding[] = [];
+
+  for (const planned of plannedComments) {
+    const commentIndex = reviewComments.findIndex(
+      (comment, index) =>
+        !matchedCommentIndexes.has(index) &&
+        comment.path === planned.comment.path &&
+        comment.line === planned.comment.line &&
+        comment.side === planned.comment.side &&
+        comment.body === planned.comment.body,
+    );
+
+    if (commentIndex === -1) {
+      continue;
+    }
+
+    const comment = reviewComments[commentIndex];
+    if (comment === undefined) {
+      continue;
+    }
+
+    matchedCommentIndexes.add(commentIndex);
+    postedFindings.push({
+      dedupeKey: buildFindingDedupeKey(planned.finding),
+      githubCommentId: String(comment.id),
+      line: planned.finding.line,
+      path: planned.comment.path,
+    });
+  }
+
+  return postedFindings;
+}
+
 function formatFinding(finding: ReviewFinding, index: number): string {
   const comment = finding.improvedComment ?? finding.summary;
 
@@ -430,27 +730,73 @@ async function storeReviewRunInDatabase(input: StoreReviewRunInput): Promise<voi
     });
 
     if (input.result.findings.length > 0) {
+      const postedFindingByDedupeKey = new Map(
+        (input.postedFindings ?? []).map((postedFinding) => [
+          postedFinding.dedupeKey,
+          postedFinding,
+        ]),
+      );
+
       await database.finding.createMany({
-        data: input.result.findings.map((finding) => ({
-          category: mapEnumValue(finding.category),
-          confidence: finding.confidence,
-          dedupeKey: buildFindingDedupeKey(finding),
-          evidence: finding.evidence,
-          filePath: finding.filePath,
-          line: finding.line,
-          relatedRuleIds: finding.relatedRuleIds,
-          reviewRunId: reviewRun.id,
-          severity: mapEnumValue(finding.severity),
-          side: finding.side,
-          status: input.posted ? "POSTED" : "VALIDATED",
-          suggestedFix: finding.suggestedFix,
-          summary: finding.summary,
-          title: finding.title,
-          whyItMatters: finding.whyItMatters,
-        })),
+        data: input.result.findings.map((finding) => {
+          const dedupeKey = buildFindingDedupeKey(finding);
+          const postedFinding = postedFindingByDedupeKey.get(dedupeKey);
+
+          return {
+            category: mapEnumValue(finding.category),
+            confidence: finding.confidence,
+            dedupeKey,
+            evidence: finding.evidence,
+            filePath: finding.filePath,
+            ...(postedFinding === undefined
+              ? {}
+              : { githubCommentId: postedFinding.githubCommentId }),
+            line: finding.line,
+            relatedRuleIds: finding.relatedRuleIds,
+            reviewRunId: reviewRun.id,
+            severity: mapEnumValue(finding.severity),
+            side: finding.side,
+            status: postedFinding === undefined ? "VALIDATED" : "POSTED",
+            suggestedFix: finding.suggestedFix,
+            summary: finding.summary,
+            title: finding.title,
+            whyItMatters: finding.whyItMatters,
+          };
+        }),
         skipDuplicates: true,
       });
     }
+  } finally {
+    await database.$disconnect();
+  }
+}
+
+async function loadPostedFindingDedupeKeysFromDatabase(input: PullRequestRef): Promise<Set<string>> {
+  const { createDatabaseClient } = await import("@diffguard/database");
+  const database = createDatabaseClient() as unknown as PrismaClientLike;
+
+  try {
+    const findings = await database.finding.findMany({
+      select: {
+        dedupeKey: true,
+      },
+      where: {
+        githubCommentId: {
+          not: null,
+        },
+        reviewRun: {
+          pullRequest: {
+            number: input.number,
+            repository: {
+              name: input.repo,
+              owner: input.owner,
+            },
+          },
+        },
+      },
+    });
+
+    return new Set(findings.map((finding) => finding.dedupeKey));
   } finally {
     await database.$disconnect();
   }

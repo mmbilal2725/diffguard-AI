@@ -20,6 +20,7 @@ function createMockOctokit() {
         createReview: vi.fn(),
         get: vi.fn(),
         listFiles: vi.fn(),
+        listReviewComments: vi.fn(),
       },
       repos: {
         getContent: vi.fn(),
@@ -356,6 +357,46 @@ describe("createGitHubClient", () => {
       owner: "acme",
       pull_number: 42,
       repo: "widgets",
+    });
+  });
+
+  it("lists review comments for a pull request review", async () => {
+    const octokit = createMockOctokit();
+    octokit.paginate.mockResolvedValue([
+      {
+        body: "Call requireAdmin() before loading customer records.",
+        html_url: "https://github.com/acme/widgets/pull/42#discussion_r901",
+        id: 901,
+        line: 27,
+        path: "src/routes/admin.ts",
+        side: "RIGHT",
+      },
+    ]);
+
+    const client = createGitHubClient({ octokit });
+    const result = await client.listPullRequestReviewComments({
+      ref: { owner: "acme", repo: "widgets", number: 42 },
+      reviewId: 9,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      data: [
+        {
+          body: "Call requireAdmin() before loading customer records.",
+          htmlUrl: "https://github.com/acme/widgets/pull/42#discussion_r901",
+          id: 901,
+          line: 27,
+          path: "src/routes/admin.ts",
+          side: "RIGHT",
+        },
+      ],
+    });
+    expect(octokit.paginate).toHaveBeenCalledWith(octokit.rest.pulls.listReviewComments, {
+      owner: "acme",
+      pull_number: 42,
+      repo: "widgets",
+      review_id: 9,
     });
   });
 

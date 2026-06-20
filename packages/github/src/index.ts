@@ -50,6 +50,11 @@ const CreatePullRequestReviewInputSchema = z.object({
   ref: PullRequestRefSchema,
 });
 
+const ListPullRequestReviewCommentsInputSchema = z.object({
+  ref: PullRequestRefSchema,
+  reviewId: z.number().int().positive(),
+});
+
 const GitHubClientConfigSchema = z
   .object({
     authToken: z.string().min(1).optional(),
@@ -109,6 +114,15 @@ const PullRequestReviewResponseSchema = z.object({
   state: z.string(),
 });
 
+const PullRequestReviewCommentResponseSchema = z.object({
+  body: z.string().nullable().optional(),
+  html_url: z.string(),
+  id: z.number(),
+  line: z.number().nullable().optional(),
+  path: z.string(),
+  side: z.enum(["LEFT", "RIGHT"]).nullable().optional(),
+});
+
 const GitHubAppInstallationTokenInputSchema = z.object({
   appId: z.string().min(1),
   baseUrl: z.string().url().default("https://api.github.com"),
@@ -130,6 +144,9 @@ export type FileAtRefInput = z.infer<typeof FileAtRefInputSchema>;
 export type PostPullRequestCommentInput = z.infer<typeof PostPullRequestCommentInputSchema>;
 export type ReviewCommentInput = z.infer<typeof ReviewCommentInputSchema>;
 export type CreatePullRequestReviewInput = z.infer<typeof CreatePullRequestReviewInputSchema>;
+export type ListPullRequestReviewCommentsInput = z.infer<
+  typeof ListPullRequestReviewCommentsInputSchema
+>;
 
 export type PullRequestMetadata = {
   additions: number;
@@ -179,6 +196,15 @@ export type PullRequestReview = {
   htmlUrl: string;
   id: number;
   state: string;
+};
+
+export type PullRequestReviewComment = {
+  body?: string;
+  htmlUrl: string;
+  id: number;
+  line?: number;
+  path: string;
+  side?: "LEFT" | "RIGHT";
 };
 
 export type GitHubErrorKind =
@@ -264,8 +290,12 @@ type PullsCreateReviewParams = {
   repo: string;
 };
 
+type PullsListReviewCommentsParams = PullsGetParams & {
+  review_id: number;
+};
+
 type GitHubApi = {
-  paginate<T>(method: unknown, params: PullsListFilesParams): Promise<T[]>;
+  paginate<T>(method: unknown, params: PullsListFilesParams | PullsListReviewCommentsParams): Promise<T[]>;
   request(route: string, params: Record<string, unknown>): GitHubResponse<unknown>;
   rest: {
     issues: {
@@ -275,6 +305,7 @@ type GitHubApi = {
       createReview(params: PullsCreateReviewParams): GitHubResponse<unknown>;
       get(params: PullsGetParams): GitHubResponse<unknown>;
       listFiles: unknown;
+      listReviewComments: unknown;
     };
     repos: {
       getContent(params: ReposGetContentParams): GitHubResponse<unknown>;
@@ -289,6 +320,9 @@ export type DiffGuardGitHubClient = {
   fetchPullRequestDiff(ref: PullRequestRef): Promise<GitHubResult<string>>;
   getPullRequestMetadata(ref: PullRequestRef): Promise<GitHubResult<PullRequestMetadata>>;
   listPullRequestFiles(ref: PullRequestRef): Promise<GitHubResult<PullRequestFile[]>>;
+  listPullRequestReviewComments(
+    input: ListPullRequestReviewCommentsInput,
+  ): Promise<GitHubResult<PullRequestReviewComment[]>>;
   postPullRequestComment(
     input: PostPullRequestCommentInput,
   ): Promise<GitHubResult<PullRequestComment>>;
@@ -428,6 +462,30 @@ export function createGitHubClient(config: GitHubClientConfig): DiffGuardGitHubC
             previousFilename: parsedFile.previous_filename,
             sha: parsedFile.sha,
             status: parsedFile.status,
+          };
+        });
+      });
+    },
+
+    async listPullRequestReviewComments(input) {
+      return withValidatedInput(ListPullRequestReviewCommentsInputSchema, input, async (parsed) => {
+        const comments = await octokit.paginate<unknown>(octokit.rest.pulls.listReviewComments, {
+          owner: parsed.ref.owner,
+          pull_number: parsed.ref.number,
+          repo: parsed.ref.repo,
+          review_id: parsed.reviewId,
+        });
+
+        return comments.map((comment) => {
+          const parsedComment = PullRequestReviewCommentResponseSchema.parse(comment);
+
+          return {
+            body: parsedComment.body ?? undefined,
+            htmlUrl: parsedComment.html_url,
+            id: parsedComment.id,
+            line: parsedComment.line ?? undefined,
+            path: parsedComment.path,
+            side: parsedComment.side ?? undefined,
           };
         });
       });

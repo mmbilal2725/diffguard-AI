@@ -28,8 +28,10 @@ The pipeline flow is:
     state, and per-stage timings.
 
 Missing `.diffguard-rules.md` is treated as an empty rules context and does not
-fail the review. The first version does not post GitHub comments; dry-run state
-is recorded on the context and result for the worker/API layers to honor when
-comment posting is added. If no validator is configured, the placeholder
-validator rejects candidates by default so DiffGuard-AI prefers silence over
-posting unvalidated comments.
+fail the review. Comment posting happens after this package returns a
+`ReviewResult`: the CLI caps findings, skips previously posted dedupe keys when
+database state is available, maps findings to diff-valid lines, batches inline
+GitHub review comments into one review, and posts a summary issue comment only
+for findings that cannot be mapped inline. If no validator is configured, the
+placeholder validator rejects candidates by default so DiffGuard-AI prefers
+silence over posting unvalidated comments.

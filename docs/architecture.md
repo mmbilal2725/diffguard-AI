@@ -12,8 +12,8 @@ DiffGuard-AI is organized as a pnpm TypeScript monorepo with deployable apps and
 
 - `packages/github`: Octokit-based GitHub API wrapper boundary for PR metadata, changed
   files, raw diffs, repository file reads, `.diffguard-rules.md`, general PR comments,
-  and inline pull request reviews. Methods validate inputs with Zod and return
-  structured result objects instead of exposing raw Octokit errors.
+  inline pull request reviews, and review-comment ID lookup. Methods validate inputs
+  with Zod and return structured result objects instead of exposing raw Octokit errors.
 - `packages/reviewer`: Review pipeline orchestration boundary.
 - `packages/llm`: Prompt versions, model client boundary, and structured output schemas.
   The package exposes provider interfaces, an OpenAI implementation, versioned review
@@ -39,7 +39,9 @@ The full AI review workflow is intentionally not implemented in the scaffold. Th
 8. Worker reads `.diffguard-rules.md` from the target repository.
 9. Worker runs static checks and calls `packages/llm` for structured findings.
 10. Worker validates, deduplicates, and posts only high-confidence findings.
-11. Metrics and feedback events are stored for quality tracking.
+11. Inline-capable findings are batched into one GitHub review; unmapped findings use
+    a summary issue comment fallback.
+12. Metrics, GitHub comment IDs, and feedback events are stored for quality tracking.
 
 ## Eval Runner
 
