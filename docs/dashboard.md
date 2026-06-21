@@ -24,7 +24,7 @@ Dashboard API endpoints:
 - `GET /dashboard/review-runs/:id`: review run detail with findings, validator decisions, and model-call telemetry.
 - `GET /dashboard/repositories`: connected repositories and dashboard settings.
 - `GET /dashboard/findings`: latest findings.
-- `GET /dashboard/evals`: eval summaries.
+- `GET /dashboard/evals`: persisted eval summaries from `diffguard-ai eval run` when `DATABASE_URL` is configured.
 
 Mock data is retained only for local demo mode. Set `DIFFGUARD_DEMO_MODE=true` when running `apps/web` if you want the dashboard to fall back to local sample data when the API is offline.
 

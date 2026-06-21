@@ -13,6 +13,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@diffguard/database": "workspace:*",
     "@diffguard/evals": "workspace:*",
     "@diffguard/github": "workspace:*",
     "@diffguard/llm": "workspace:*",

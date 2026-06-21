@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { EvalCase, EvalReport } from "@diffguard/evals";
 
@@ -101,6 +101,30 @@ describe("eval command", () => {
 
     expect(result.output).toBe("{}");
     expect(result.exitCode).toBe(1);
+  });
+
+  it("stores an eval run summary when persistence is configured", async () => {
+    const storeEvalSummary = vi.fn(async () => undefined);
+    const report = createEvalReport({ passed: true });
+
+    await runEvalCommand(
+      {
+        failOnRegression: false,
+        model: "gpt-5.5",
+        output: "json",
+        promptVersion: "review-v2",
+      },
+      {
+        formatEvalReport: () => "{}",
+        runEvalSuite: async () => report,
+        storeEvalSummary,
+      },
+    );
+
+    expect(storeEvalSummary).toHaveBeenCalledWith({
+      report,
+      runName: "review-v2 / gpt-5.5",
+    });
   });
 });
 

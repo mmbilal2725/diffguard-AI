@@ -66,6 +66,9 @@ importers:
 
   apps/cli:
     dependencies:
+      '@diffguard/database':
+        specifier: workspace:*
+        version: link:../../packages/database
       '@diffguard/evals':
         specifier: workspace:*
         version: link:../../packages/evals

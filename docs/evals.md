@@ -77,3 +77,5 @@ diffguard-ai eval run --cases eval-cases.json --model gpt-5.5 --prompt-version r
 ```
 
 The command always prints the report. With `--fail-on-regression`, it exits with code `1` when any false positive or false negative is present.
+
+When `DATABASE_URL` is configured, `diffguard-ai eval run` also stores an eval run summary in Prisma. The dashboard API exposes those rows from `GET /dashboard/evals`, and the web dashboard shows the latest persisted eval summaries. If `DATABASE_URL` is not set, eval persistence is skipped and the command still prints the report normally.

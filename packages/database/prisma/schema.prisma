@@ -141,6 +141,28 @@ model WebhookDelivery {
   @@index([processedAt])
 }
 
+model EvalRun {
+  id                     String   @id @default(cuid())
+  name                   String
+  modelVersion           String
+  promptVersion          String
+  precision              Decimal  @db.Decimal(5, 4)
+  recall                 Decimal  @db.Decimal(5, 4)
+  falsePositiveCount     Int      @default(0)
+  falseNegativeCount     Int      @default(0)
+  costUsd                Decimal  @default(0) @db.Decimal(12, 6)
+  caseCount              Int
+  latencyMs              Int      @default(0)
+  passed                 Boolean  @default(false)
+  truePositiveCount      Int      @default(0)
+  validatorRejectionRate Decimal  @default(0) @db.Decimal(5, 4)
+  findingsPerPr          Decimal  @default(0) @db.Decimal(8, 4)
+  createdAt              DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([modelVersion, promptVersion])
+}
+
 model Finding {
   id              String          @id @default(cuid())
   reviewRunId     String

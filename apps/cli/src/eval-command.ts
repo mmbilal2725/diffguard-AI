@@ -10,6 +10,11 @@ import {
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 
+import {
+  createDefaultEvalSummaryStore,
+  type StoreEvalSummary,
+} from "./eval-summary-store.js";
+
 const DEFAULT_OUTPUT_FORMAT: EvalOutputFormat = "markdown";
 const DEFAULT_MODEL_VERSION = "not-configured";
 const DEFAULT_PROMPT_VERSION = "not-configured";
@@ -39,6 +44,7 @@ export type EvalCommandDependencies = {
   formatEvalReport?: (report: EvalReport, output: EvalOutputFormat) => string;
   readFile?: (path: string) => Promise<string>;
   runEvalSuite?: (input: EvalSuiteInput) => Promise<EvalReport>;
+  storeEvalSummary?: StoreEvalSummary;
 };
 
 type ParsedArgValue = boolean | string | undefined;
@@ -75,6 +81,10 @@ export async function runEvalCommand(
     modelVersion: options.model,
     promptVersion: options.promptVersion,
   });
+  const runName = `${report.summary.promptVersion} / ${report.summary.modelVersion}`;
+  const storeEvalSummary =
+    dependencies.storeEvalSummary ?? (await createEvalSummaryStoreFromEnvironment());
+  await storeEvalSummary?.({ report, runName });
   const formatter = dependencies.formatEvalReport ?? formatEvalReport;
 
   return {
@@ -82,6 +92,12 @@ export async function runEvalCommand(
     output: formatter(report, options.output),
     report,
   };
+}
+
+async function createEvalSummaryStoreFromEnvironment(): Promise<StoreEvalSummary | undefined> {
+  return process.env.DATABASE_URL === undefined || process.env.DATABASE_URL.trim() === ""
+    ? undefined
+    : createDefaultEvalSummaryStore();
 }
 
 function normalizeCliArgv(argv: string[]): string[] {

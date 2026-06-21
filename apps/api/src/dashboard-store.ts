@@ -170,7 +170,22 @@ type ReviewRunRecord = {
   modelCalls: ModelCallRecord[];
 };
 
+type EvalRunRecord = {
+  id: string;
+  name: string;
+  createdAt: Date;
+  precision: DecimalLike;
+  recall: DecimalLike;
+  falsePositiveCount: number;
+  falseNegativeCount: number;
+  costUsd: DecimalLike;
+  caseCount: number;
+};
+
 type DashboardDatabaseClient = {
+  evalRun: {
+    findMany(args: unknown): Promise<EvalRunRecord[]>;
+  };
   repository: {
     findMany(args: unknown): Promise<RepositoryRecord[]>;
   };
@@ -203,7 +218,12 @@ export function createPrismaDashboardStore(database: DashboardDatabaseClient): D
       return reviewRun === null ? null : toDashboardReviewRun(reviewRun);
     },
     async listEvalSummaries() {
-      return [];
+      const evalRuns = await database.evalRun.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 100,
+      });
+
+      return evalRuns.map(toDashboardEvalSummary);
     },
     async listFindings() {
       const findings = await database.finding.findMany({
@@ -395,6 +415,20 @@ function toDashboardRepository(repository: RepositoryRecord): DashboardRepositor
     maxFindingsPerPr: 5,
     repo: `${repository.owner}/${repository.name}`,
     rulesPath: repository.rulesPath,
+  };
+}
+
+function toDashboardEvalSummary(evalRun: EvalRunRecord): DashboardEvalSummary {
+  return {
+    cases: evalRun.caseCount,
+    costUsd: roundCurrency(toNumber(evalRun.costUsd)),
+    createdAt: evalRun.createdAt.toISOString(),
+    falseNegatives: evalRun.falseNegativeCount,
+    falsePositives: evalRun.falsePositiveCount,
+    id: evalRun.id,
+    name: evalRun.name,
+    precision: toNumber(evalRun.precision),
+    recall: toNumber(evalRun.recall),
   };
 }
 
