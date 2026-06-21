@@ -493,6 +493,31 @@ describe("review command", () => {
     });
   });
 
+  it("passes static check disablement from DIFFGUARD_STATIC_CHECKS to the pipeline", async () => {
+    const dependencies = createDependencies({
+      env: {
+        DIFFGUARD_STATIC_CHECKS: "false",
+        GITHUB_TOKEN: "ghs_token",
+      },
+    });
+
+    await runReviewCommand(
+      {
+        dryRun: true,
+        minConfidence: 0.7,
+        output: "json",
+        owner: "acme",
+        pullNumber: 42,
+        repo: "widgets",
+      },
+      dependencies,
+    );
+
+    expect(dependencies.runReviewPipelineCalls[0]).toMatchObject({
+      staticChecksEnabled: false,
+    });
+  });
+
   it("uses OPENAI_API_KEY to run the default pipeline through three LLM review passes without posting in dry-run", async () => {
     const postedComments: PostPullRequestCommentInput[] = [];
     const createdReviews: CreatePullRequestReviewInput[] = [];
@@ -528,6 +553,7 @@ describe("review command", () => {
         createdReviews.push(input);
       },
       env: {
+        DIFFGUARD_STATIC_CHECKS: "false",
         GITHUB_TOKEN: "ghs_token",
         OPENAI_API_KEY: "sk-test",
       },
@@ -614,6 +640,7 @@ describe("review command", () => {
       createLlmProvider: () => provider,
       env: {
         DIFFGUARD_REVIEW_PASSES: "security-bugs",
+        DIFFGUARD_STATIC_CHECKS: "false",
         DIFFGUARD_VALIDATOR_MODEL: "gpt-test-validator",
         GITHUB_TOKEN: "ghs_token",
         OPENAI_API_KEY: "sk-test",

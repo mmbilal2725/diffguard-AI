@@ -120,6 +120,7 @@ export async function runReviewCommand(
     owner: options.owner,
     pullNumber: options.pullNumber,
     repo: options.repo,
+    ...(areStaticChecksEnabled(env) ? {} : { staticChecksEnabled: false }),
     ...(findingValidator === undefined
       ? {}
       : { findingValidator }),
@@ -169,6 +170,12 @@ export async function runReviewCommand(
     summary: finalized.summary,
     warnings: llmReviewerSetup.warnings,
   };
+}
+
+function areStaticChecksEnabled(env: Record<string, string | undefined>): boolean {
+  const value = env.DIFFGUARD_STATIC_CHECKS?.trim().toLowerCase();
+
+  return value !== "false" && value !== "0" && value !== "off" && value !== "disabled";
 }
 
 function parseArgs(args: string[]): Record<string, ParsedArgValue> {

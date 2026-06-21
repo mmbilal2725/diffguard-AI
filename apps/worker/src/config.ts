@@ -4,6 +4,7 @@ const WorkerEnvSchema = z.object({
   GITHUB_APP_ID: z.string().min(1).optional(),
   GITHUB_APP_PRIVATE_KEY: z.string().min(1).optional(),
   DIFFGUARD_REVIEW_PASSES: z.string().min(1).optional(),
+  DIFFGUARD_STATIC_CHECKS: z.string().min(1).optional(),
   DIFFGUARD_VALIDATOR_MODEL: z.string().min(1).optional(),
   OPENAI_API_KEY: z.string().min(1).optional(),
   OPENAI_RESOLUTION_MODEL: z.string().min(1).optional(),
@@ -20,6 +21,7 @@ export type WorkerConfig = {
   reviewPasses?: string;
   redisUrl: string;
   queueName: string;
+  staticChecksEnabled: boolean;
 };
 
 export function createWorkerConfig(env: NodeJS.ProcessEnv): WorkerConfig {
@@ -33,6 +35,13 @@ export function createWorkerConfig(env: NodeJS.ProcessEnv): WorkerConfig {
     openaiResolutionModel: parsed.OPENAI_RESOLUTION_MODEL,
     reviewPasses: parsed.DIFFGUARD_REVIEW_PASSES,
     redisUrl: parsed.REDIS_URL,
-    queueName: parsed.REVIEW_QUEUE_NAME
+    queueName: parsed.REVIEW_QUEUE_NAME,
+    staticChecksEnabled: parseStaticChecksEnabled(parsed.DIFFGUARD_STATIC_CHECKS)
   };
+}
+
+function parseStaticChecksEnabled(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+
+  return normalized !== "false" && normalized !== "0" && normalized !== "off" && normalized !== "disabled";
 }

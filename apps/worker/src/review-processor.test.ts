@@ -107,6 +107,41 @@ describe("createReviewProcessor", () => {
     );
   });
 
+  it("passes static check configuration into the review pipeline", async () => {
+    const githubClient = createGitHubClientDouble();
+    const runReviewPipeline = vi.fn(async () => createReviewResult());
+    const processor = createReviewProcessor({
+      appId: "12345",
+      createGitHubClient: vi.fn(() => githubClient),
+      createInstallationToken: vi.fn(async () => ({
+        expiresAt: "2026-06-20T00:00:00Z",
+        token: "ghs_installation_token",
+      })),
+      privateKey: "private-key",
+      runReviewPipeline,
+      staticChecksEnabled: false,
+    });
+
+    await processor({
+      data: {
+        deliveryId: "delivery-1",
+        headSha: "head-sha",
+        installationId: "98765",
+        owner: "acme",
+        pullNumber: 42,
+        repo: "widgets",
+        reviewRunId: "review_run_1",
+        trigger: "pull_request.opened",
+      },
+    });
+
+    expect(runReviewPipeline).toHaveBeenCalledWith(
+      expect.objectContaining({
+        staticChecksEnabled: false,
+      }),
+    );
+  });
+
   it("tracks resolutions for previously posted findings using latest review evidence", async () => {
     const savedResolutionRuns: unknown[] = [];
     const createInstallationToken = vi.fn(async () => ({

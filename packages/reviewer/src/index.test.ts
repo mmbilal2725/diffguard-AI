@@ -98,6 +98,30 @@ describe("review pipeline", () => {
     expect(result.findings).toEqual([]);
   });
 
+  it("can disable the default static checks", async () => {
+    const github = createGitHubClientDouble({
+      files: [
+        {
+          ...changedFile,
+          filename: "src/config.ts",
+          patch: '@@ -1,1 +1,2 @@\n+const OPENAI_API_KEY = "sk_live_1234567890abcdef";',
+        },
+      ],
+    });
+    const findingValidator = createApprovingValidator();
+
+    const result = await runReviewPipeline({
+      findingValidator,
+      github: { client: github },
+      owner: "acme",
+      pullNumber: 42,
+      repo: "widgets",
+      staticChecksEnabled: false,
+    });
+
+    expect(result.findings).toEqual([]);
+  });
+
   it("dedupes findings by file path, line, category, and normalized title", async () => {
     const github = createGitHubClientDouble();
     const findingValidator = createApprovingValidator();

@@ -14,8 +14,11 @@ The pipeline flow is:
 2. List changed files.
 3. Read `.diffguard-rules.md` from the pull request head SHA.
 4. Build a `ReviewContext`.
-5. Run static checks. The default runner is a no-op until concrete checks are
-   configured.
+5. Run conservative static checks over added diff lines. The default checks look
+   for committed secrets, sensitive logging, admin routes without obvious auth
+   guards, destructive database migration operations, hardcoded production URLs
+   or credential-bearing connection strings, and changed critical files without
+   test updates.
 6. Run LLM review candidates. The default package runner is a no-op; callers can
    inject one or more structured LLM review passes. The CLI and GitHub App
    worker inject the `packages/llm` reviewer when `OPENAI_API_KEY` is
@@ -39,7 +42,11 @@ The pipeline flow is:
     state, model-call telemetry, and per-stage timings.
 
 Missing `.diffguard-rules.md` is treated as an empty rules context and does not
-fail the review. Comment posting happens after this package returns a
+fail the review. When rules are present, static admin-route checks use obvious
+guard names mentioned in `.diffguard-rules.md`, such as `requireAdmin()`, as
+additional evidence. Static checks are enabled by default in CLI and worker
+mode; set `DIFFGUARD_STATIC_CHECKS=false` to disable them. Comment posting
+happens after this package returns a
 `ReviewResult`: `packages/review-run` caps findings, skips previously posted
 dedupe keys when database state is available, uses the shared unified diff
 parser to map findings to diff-valid lines, batches inline GitHub review

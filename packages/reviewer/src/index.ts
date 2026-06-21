@@ -16,6 +16,8 @@ import {
 } from "@diffguard/shared";
 import { z } from "zod";
 
+import { runDefaultStaticChecks } from "./static-checks.js";
+
 export {
   ResolutionStatusSchema,
   calculateResolutionMetrics,
@@ -28,6 +30,7 @@ export {
   type ResolutionValidatorResult,
   type StoredPostedFinding,
 } from "./resolution-tracker.js";
+export { runDefaultStaticChecks } from "./static-checks.js";
 
 const MINIMUM_POSTABLE_CONFIDENCE = 0.7;
 const DIFFGUARD_RULES_PATH = ".diffguard-rules.md";
@@ -38,6 +41,7 @@ const PipelineInputSchema = z.object({
   owner: z.string().min(1),
   pullNumber: z.number().int().positive(),
   repo: z.string().min(1),
+  staticChecksEnabled: z.boolean().default(true),
 });
 
 const StyleOnlyCategorySchema = z.enum(["style_only", "style", "formatting", "naming"]);
@@ -201,6 +205,7 @@ export type RunReviewPipelineInput = {
   pullNumber: number;
   repo: string;
   staticCheckRunner?: StaticCheckRunner;
+  staticChecksEnabled?: boolean;
   confidenceThreshold?: number;
 };
 
@@ -293,9 +298,13 @@ export async function runReviewPipeline(input: RunReviewPipelineInput): Promise<
     }),
   );
 
-  const staticCandidates = await recordStage(timings, "static_checks", async () =>
-    (input.staticCheckRunner ?? runPlaceholderStaticChecks)(context),
-  );
+  const staticCandidates = await recordStage(timings, "static_checks", async () => {
+    if (!parsedInput.staticChecksEnabled) {
+      return [];
+    }
+
+    return (input.staticCheckRunner ?? runDefaultStaticChecks)(context);
+  });
 
   const llmReview = await recordStage(timings, "llm_review", async () =>
     normalizeLlmReviewerResult(await (input.llmReviewer ?? runPlaceholderLlmReviewer)(context)),

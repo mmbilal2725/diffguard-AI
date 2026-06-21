@@ -76,6 +76,7 @@ export type CreateReviewProcessorOptions = {
   resolutionValidator?: ResolutionValidator;
   runReviewPipeline?: ReviewPipelineRunner;
   staticCheckRunner?: StaticCheckRunner;
+  staticChecksEnabled?: boolean;
   storeReviewRun?: (input: StoreReviewRunInput) => Promise<void>;
 };
 
@@ -115,6 +116,9 @@ export function createReviewProcessor(options: CreateReviewProcessorOptions) {
         ...(options.staticCheckRunner === undefined
           ? {}
           : { staticCheckRunner: options.staticCheckRunner }),
+        ...(options.staticChecksEnabled === undefined
+          ? {}
+          : { staticChecksEnabled: options.staticChecksEnabled }),
       });
       const finalizer = options.finalizeReviewRun ?? finalizeReviewRun;
       const storeReviewRun = options.storeReviewRun;

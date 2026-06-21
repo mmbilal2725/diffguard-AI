@@ -59,6 +59,7 @@ const worker = new Worker<ReviewJobData>(
     ...(llmSetup.llmReviewer === undefined ? {} : { llmReviewer: llmSetup.llmReviewer }),
     ...reviewRunPersistence,
     resolutionStore,
+    staticChecksEnabled: config.staticChecksEnabled,
     resolutionValidator:
       llmProvider === undefined
         ? undefined
