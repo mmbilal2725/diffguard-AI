@@ -41,9 +41,10 @@ REVIEW_QUEUE_NAME="diffguard-review-runs"
 GITHUB_APP_ID="12345"
 GITHUB_APP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
 GITHUB_WEBHOOK_SECRET="use-a-long-random-secret"
+DIFFGUARD_DASHBOARD_API_KEY="use-a-different-long-random-secret"
 ```
 
-Do not log the private key, webhook secret, or installation tokens. DiffGuard stores the GitHub installation id, repository identity, pull request metadata, review run metadata, and webhook delivery ids for idempotency.
+Do not log the private key, webhook secret, dashboard API key, or installation tokens. DiffGuard stores the GitHub installation id, repository identity, pull request metadata, review run metadata, and webhook delivery ids for idempotency.
 
 ## Runtime Flow
 

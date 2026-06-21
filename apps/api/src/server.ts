@@ -1,5 +1,7 @@
+import { timingSafeEqual } from "node:crypto";
+
 import { REVIEW_QUEUE_JOB_NAME, type ReviewJobData } from "@diffguard/shared";
-import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 
 import { createPrismaDashboardStore, type DashboardStore } from "./dashboard-store.js";
 import { toReviewWebhookRequest, readWebhookAction } from "./github-webhook.js";
@@ -8,6 +10,7 @@ import { verifyGitHubWebhookSignature } from "./webhook-signature.js";
 import { createPrismaWebhookStore, type WebhookStore } from "./webhook-store.js";
 
 export type BuildApiServerOptions = {
+  dashboardApiKey?: string;
   dashboardStore?: DashboardStore;
   reviewQueue?: ReviewQueue;
   store?: WebhookStore;
@@ -30,19 +33,34 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
     return { status: "ok" };
   });
 
-  server.get("/dashboard/overview", async () => {
+  server.get("/dashboard/overview", async (request, reply) => {
+    const authorized = requireDashboardApiKey(request, reply, readDashboardApiKey(options));
+    if (authorized !== true) {
+      return authorized;
+    }
+
     const dashboardStore =
       options.dashboardStore ?? (defaultDashboardStore ??= await createDefaultDashboardStore());
     return dashboardStore.getOverview();
   });
 
-  server.get("/dashboard/review-runs", async () => {
+  server.get("/dashboard/review-runs", async (request, reply) => {
+    const authorized = requireDashboardApiKey(request, reply, readDashboardApiKey(options));
+    if (authorized !== true) {
+      return authorized;
+    }
+
     const dashboardStore =
       options.dashboardStore ?? (defaultDashboardStore ??= await createDefaultDashboardStore());
     return { reviewRuns: await dashboardStore.listReviewRuns() };
   });
 
   server.get<{ Params: { id: string } }>("/dashboard/review-runs/:id", async (request, reply) => {
+    const authorized = requireDashboardApiKey(request, reply, readDashboardApiKey(options));
+    if (authorized !== true) {
+      return authorized;
+    }
+
     const dashboardStore =
       options.dashboardStore ?? (defaultDashboardStore ??= await createDefaultDashboardStore());
     const reviewRun = await dashboardStore.getReviewRun(request.params.id);
@@ -54,19 +72,34 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
     return { reviewRun };
   });
 
-  server.get("/dashboard/repositories", async () => {
+  server.get("/dashboard/repositories", async (request, reply) => {
+    const authorized = requireDashboardApiKey(request, reply, readDashboardApiKey(options));
+    if (authorized !== true) {
+      return authorized;
+    }
+
     const dashboardStore =
       options.dashboardStore ?? (defaultDashboardStore ??= await createDefaultDashboardStore());
     return { repositories: await dashboardStore.listRepositories() };
   });
 
-  server.get("/dashboard/findings", async () => {
+  server.get("/dashboard/findings", async (request, reply) => {
+    const authorized = requireDashboardApiKey(request, reply, readDashboardApiKey(options));
+    if (authorized !== true) {
+      return authorized;
+    }
+
     const dashboardStore =
       options.dashboardStore ?? (defaultDashboardStore ??= await createDefaultDashboardStore());
     return { findings: await dashboardStore.listFindings() };
   });
 
-  server.get("/dashboard/evals", async () => {
+  server.get("/dashboard/evals", async (request, reply) => {
+    const authorized = requireDashboardApiKey(request, reply, readDashboardApiKey(options));
+    if (authorized !== true) {
+      return authorized;
+    }
+
     const dashboardStore =
       options.dashboardStore ?? (defaultDashboardStore ??= await createDefaultDashboardStore());
     return { evals: await dashboardStore.listEvalSummaries() };
@@ -166,6 +199,49 @@ function readRawPayload(request: FastifyRequest): string {
 function readHeader(request: FastifyRequest, name: string): string | undefined {
   const value = request.headers[name];
   return typeof value === "string" ? value : undefined;
+}
+
+function readDashboardApiKey(options: BuildApiServerOptions): string | undefined {
+  return options.dashboardApiKey ?? process.env.DIFFGUARD_DASHBOARD_API_KEY;
+}
+
+function requireDashboardApiKey(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  configuredApiKey: string | undefined
+): true | FastifyReply {
+  if (configuredApiKey === undefined || configuredApiKey.trim() === "") {
+    return reply.code(500).send({ error: "Dashboard API key is not configured." });
+  }
+
+  const credential = readDashboardCredential(request);
+  if (credential === undefined || !secureStringEqual(credential, configuredApiKey)) {
+    return reply.code(401).send({ error: "Invalid dashboard API credentials." });
+  }
+
+  return true;
+}
+
+function readDashboardCredential(request: FastifyRequest): string | undefined {
+  const apiKeyHeader = readHeader(request, "x-diffguard-api-key");
+  if (apiKeyHeader !== undefined) {
+    return apiKeyHeader;
+  }
+
+  const authorization = readHeader(request, "authorization");
+  const bearerPrefix = "Bearer ";
+  if (authorization?.startsWith(bearerPrefix)) {
+    return authorization.slice(bearerPrefix.length);
+  }
+
+  return undefined;
+}
+
+function secureStringEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 function parseJsonPayload(payload: string): { ok: true; data: unknown } | { ok: false } {

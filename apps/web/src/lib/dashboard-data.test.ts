@@ -16,6 +16,7 @@ import {
 describe("dashboard data", () => {
   beforeEach(() => {
     vi.stubEnv("DIFFGUARD_API_BASE_URL", "http://api.local");
+    vi.stubEnv("DIFFGUARD_DASHBOARD_API_KEY", "test-dashboard-api-key");
     vi.stubEnv("DIFFGUARD_DEMO_MODE", "false");
   });
 
@@ -32,7 +33,10 @@ describe("dashboard data", () => {
     await expect(getReviewTrend()).resolves.toEqual(apiOverview.reviewTrend);
 
     expect(fetchMock).toHaveBeenCalledWith("http://api.local/dashboard/overview", {
-      cache: "no-store"
+      cache: "no-store",
+      headers: {
+        authorization: "Bearer test-dashboard-api-key"
+      }
     });
   });
 
@@ -46,20 +50,41 @@ describe("dashboard data", () => {
     await expect(getEvalRuns()).resolves.toEqual([apiEval]);
 
     expect(fetchMock).toHaveBeenCalledWith("http://api.local/dashboard/review-runs", {
-      cache: "no-store"
+      cache: "no-store",
+      headers: {
+        authorization: "Bearer test-dashboard-api-key"
+      }
     });
     expect(fetchMock).toHaveBeenCalledWith("http://api.local/dashboard/review-runs/rvw_api", {
-      cache: "no-store"
+      cache: "no-store",
+      headers: {
+        authorization: "Bearer test-dashboard-api-key"
+      }
     });
     expect(fetchMock).toHaveBeenCalledWith("http://api.local/dashboard/repositories", {
-      cache: "no-store"
+      cache: "no-store",
+      headers: {
+        authorization: "Bearer test-dashboard-api-key"
+      }
     });
     expect(fetchMock).toHaveBeenCalledWith("http://api.local/dashboard/findings", {
-      cache: "no-store"
+      cache: "no-store",
+      headers: {
+        authorization: "Bearer test-dashboard-api-key"
+      }
     });
     expect(fetchMock).toHaveBeenCalledWith("http://api.local/dashboard/evals", {
-      cache: "no-store"
+      cache: "no-store",
+      headers: {
+        authorization: "Bearer test-dashboard-api-key"
+      }
     });
+  });
+
+  it("requires a dashboard API key outside local demo mode", async () => {
+    vi.stubEnv("DIFFGUARD_DASHBOARD_API_KEY", "");
+
+    await expect(getReviewRuns()).rejects.toThrow("Dashboard API key is required");
   });
 
   it("uses mock fallback only when local demo mode is enabled", async () => {

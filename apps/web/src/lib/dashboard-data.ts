@@ -562,7 +562,10 @@ async function loadDashboardResource<T>(
   getDemoValue: () => T
 ): Promise<T> {
   try {
-    const response = await fetch(`${getApiBaseUrl()}${path}`, { cache: "no-store" });
+    const response = await fetch(`${getApiBaseUrl()}${path}`, {
+      cache: "no-store",
+      headers: getDashboardApiHeaders()
+    });
 
     if (!response.ok) {
       throw new DashboardApiError(`Failed to load ${path}: ${response.status}`, response.status);
@@ -580,6 +583,21 @@ async function loadDashboardResource<T>(
 
     throw new DashboardApiError(`Failed to load ${path}`, undefined);
   }
+}
+
+function getDashboardApiHeaders(): Record<string, string> {
+  const apiKey = process.env.DIFFGUARD_DASHBOARD_API_KEY;
+  if (apiKey !== undefined && apiKey.trim() !== "") {
+    return {
+      authorization: `Bearer ${apiKey}`
+    };
+  }
+
+  if (isLocalDemoMode()) {
+    return {};
+  }
+
+  throw new DashboardApiError("Dashboard API key is required", undefined);
 }
 
 function getApiBaseUrl(): string {

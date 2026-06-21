@@ -64,8 +64,10 @@ Start the API and dashboard. Use demo mode only when you want local sample data
 if the API is unavailable:
 
 ```powershell
+$env:DIFFGUARD_DASHBOARD_API_KEY = "local-demo-dashboard-key"
 pnpm.cmd --filter @diffguard/api dev
 $env:DIFFGUARD_API_BASE_URL = "http://localhost:3001"
+$env:DIFFGUARD_DASHBOARD_API_KEY = "local-demo-dashboard-key"
 $env:DIFFGUARD_DEMO_MODE = "true"
 pnpm.cmd --filter @diffguard/web dev
 ```

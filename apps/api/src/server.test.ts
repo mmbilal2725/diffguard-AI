@@ -6,6 +6,7 @@ import type { DashboardStore } from "./dashboard-store.js";
 import { buildApiServer } from "./server.js";
 
 const WEBHOOK_SECRET = "test-webhook-secret";
+const DASHBOARD_API_KEY = "test-dashboard-api-key";
 
 describe("buildApiServer", () => {
   it("returns ok from the health endpoint", async () => {
@@ -24,17 +25,38 @@ describe("buildApiServer", () => {
 
   it("serves dashboard API data from the configured dashboard store", async () => {
     const dashboardStore = createDashboardStore();
-    const server = buildApiServer({ dashboardStore });
+    const server = buildApiServer({ dashboardApiKey: DASHBOARD_API_KEY, dashboardStore });
 
-    const overview = await server.inject({ method: "GET", url: "/dashboard/overview" });
-    const reviewRuns = await server.inject({ method: "GET", url: "/dashboard/review-runs" });
+    const overview = await server.inject({
+      headers: dashboardAuthHeaders(),
+      method: "GET",
+      url: "/dashboard/overview",
+    });
+    const reviewRuns = await server.inject({
+      headers: dashboardAuthHeaders(),
+      method: "GET",
+      url: "/dashboard/review-runs",
+    });
     const reviewRun = await server.inject({
+      headers: dashboardAuthHeaders(),
       method: "GET",
       url: "/dashboard/review-runs/rvw_live",
     });
-    const repositories = await server.inject({ method: "GET", url: "/dashboard/repositories" });
-    const findings = await server.inject({ method: "GET", url: "/dashboard/findings" });
-    const evals = await server.inject({ method: "GET", url: "/dashboard/evals" });
+    const repositories = await server.inject({
+      headers: dashboardAuthHeaders(),
+      method: "GET",
+      url: "/dashboard/repositories",
+    });
+    const findings = await server.inject({
+      headers: dashboardAuthHeaders(),
+      method: "GET",
+      url: "/dashboard/findings",
+    });
+    const evals = await server.inject({
+      headers: dashboardAuthHeaders(),
+      method: "GET",
+      url: "/dashboard/evals",
+    });
 
     expect(overview.statusCode).toBe(200);
     expect(overview.json()).toEqual({
@@ -55,10 +77,69 @@ describe("buildApiServer", () => {
     await server.close();
   });
 
-  it("returns not found for an unknown dashboard review run", async () => {
+  it("accepts the dashboard API key through the x-diffguard-api-key header", async () => {
+    const server = buildApiServer({
+      dashboardApiKey: DASHBOARD_API_KEY,
+      dashboardStore: createDashboardStore(),
+    });
+
+    const response = await server.inject({
+      headers: { "x-diffguard-api-key": DASHBOARD_API_KEY },
+      method: "GET",
+      url: "/dashboard/overview",
+    });
+
+    expect(response.statusCode).toBe(200);
+
+    await server.close();
+  });
+
+  it("rejects dashboard API requests without a configured API key", async () => {
     const server = buildApiServer({ dashboardStore: createDashboardStore() });
 
     const response = await server.inject({
+      method: "GET",
+      url: "/dashboard/overview",
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ error: "Dashboard API key is not configured." });
+
+    await server.close();
+  });
+
+  it("rejects dashboard API requests with missing or invalid credentials", async () => {
+    const server = buildApiServer({
+      dashboardApiKey: DASHBOARD_API_KEY,
+      dashboardStore: createDashboardStore(),
+    });
+
+    const missing = await server.inject({
+      method: "GET",
+      url: "/dashboard/overview",
+    });
+    const invalid = await server.inject({
+      headers: { authorization: "Bearer wrong-key" },
+      method: "GET",
+      url: "/dashboard/overview",
+    });
+
+    expect(missing.statusCode).toBe(401);
+    expect(missing.json()).toEqual({ error: "Invalid dashboard API credentials." });
+    expect(invalid.statusCode).toBe(401);
+    expect(invalid.json()).toEqual({ error: "Invalid dashboard API credentials." });
+
+    await server.close();
+  });
+
+  it("returns not found for an unknown dashboard review run", async () => {
+    const server = buildApiServer({
+      dashboardApiKey: DASHBOARD_API_KEY,
+      dashboardStore: createDashboardStore(),
+    });
+
+    const response = await server.inject({
+      headers: dashboardAuthHeaders(),
       method: "GET",
       url: "/dashboard/review-runs/missing",
     });
@@ -384,6 +465,12 @@ function signedHeaders(input: {
 
 function signPayload(payload: string): string {
   return `sha256=${createHmac("sha256", WEBHOOK_SECRET).update(payload).digest("hex")}`;
+}
+
+function dashboardAuthHeaders(): Record<string, string> {
+  return {
+    authorization: `Bearer ${DASHBOARD_API_KEY}`,
+  };
 }
 
 function createWebhookDependencies() {
