@@ -15,13 +15,16 @@ Set the webhook URL to:
 https://YOUR_API_HOST/webhooks/github
 ```
 
-The API automatically queues reviews for:
+The API automatically queues reviews for this allowlist only:
 
 - `pull_request.opened`
 - `pull_request.synchronize`
 - `pull_request.reopened`
 - `pull_request.closed` when the pull request was merged, stored internally as `pull_request.merged`
 - `issue_comment.created` when the comment body is exactly `/diffguard review` and the issue is a pull request
+
+Unsupported events are accepted with HTTP `202` and `status: ignored` so GitHub
+does not retry them, but they do not enqueue review work.
 
 ## Required Permissions
 
@@ -52,10 +55,17 @@ Do not log the private key, webhook secret, dashboard API key, or installation t
 ## Runtime Flow
 
 1. GitHub sends a webhook to `apps/api`.
-2. The API verifies `x-hub-signature-256` against the raw request body.
-3. The API records the `x-github-delivery` id. Duplicate deliveries return `202` with `status: duplicate` and do not enqueue another job.
+2. The API verifies `x-hub-signature-256` against the raw request body using
+   `GITHUB_WEBHOOK_SECRET`. Missing or invalid signatures return HTTP `401`
+   with a generic error and do not touch delivery persistence or the queue.
+3. The API records the `x-github-delivery` id in `WebhookDelivery`. Duplicate
+   deliveries return `202` with `status: duplicate` and do not enqueue another
+   job.
 4. Supported PR events and the manual comment command upsert repository installation and pull request metadata.
 5. The API creates a queued review run and adds a BullMQ `review-pr` job.
 6. The worker creates a short-lived installation token for the job installation id.
 7. The worker runs the review pipeline with an installation-token GitHub client.
 8. The worker uses `packages/review-run` to post validated inline or fallback comments, skip previously posted duplicate findings, and store the completed review run plus finding records when `DATABASE_URL` is configured.
+
+Webhook responses intentionally avoid echoing request payloads, secrets,
+signatures, private keys, or installation tokens.

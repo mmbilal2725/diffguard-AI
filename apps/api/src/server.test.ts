@@ -299,6 +299,35 @@ describe("buildApiServer", () => {
     await server.close();
   });
 
+  it("rejects a webhook with a missing signature", async () => {
+    const dependencies = createWebhookDependencies();
+    const server = buildApiServer({
+      reviewQueue: dependencies.reviewQueue,
+      store: dependencies.store,
+      webhookSecret: WEBHOOK_SECRET,
+    });
+    const payload = JSON.stringify(createPullRequestPayload("opened"));
+
+    const response = await server.inject({
+      headers: {
+        "content-type": "application/json",
+        "x-github-delivery": "delivery-missing-signature",
+        "x-github-event": "pull_request",
+      },
+      method: "POST",
+      payload,
+      url: "/webhooks/github",
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: "Invalid GitHub webhook signature." });
+    expect(JSON.stringify(response.json())).not.toContain(WEBHOOK_SECRET);
+    expect(dependencies.store.recordDelivery).not.toHaveBeenCalled();
+    expect(dependencies.reviewQueue.add).not.toHaveBeenCalled();
+
+    await server.close();
+  });
+
   it("ignores unsupported webhook events", async () => {
     const dependencies = createWebhookDependencies();
     const server = buildApiServer({
@@ -381,6 +410,49 @@ describe("buildApiServer", () => {
       },
       expect.objectContaining({
         jobId: "delivery-pr:review_run_1",
+      }),
+    );
+
+    await server.close();
+  });
+
+  it.each([
+    ["opened", "pull_request.opened"],
+    ["reopened", "pull_request.reopened"],
+  ] as const)("enqueues a review for pull_request.%s events", async (action, trigger) => {
+    const dependencies = createWebhookDependencies();
+    const server = buildApiServer({
+      reviewQueue: dependencies.reviewQueue,
+      store: dependencies.store,
+      webhookSecret: WEBHOOK_SECRET,
+    });
+    const payload = JSON.stringify(createPullRequestPayload(action));
+
+    const response = await server.inject({
+      headers: signedHeaders({
+        deliveryId: `delivery-pr-${action}`,
+        eventName: "pull_request",
+        payload,
+      }),
+      method: "POST",
+      payload,
+      url: "/webhooks/github",
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({ reviewRunId: "review_run_1", status: "queued" });
+    expect(dependencies.store.createReviewRun).toHaveBeenCalledWith({
+      pullRequestId: "pull_request_1",
+      trigger,
+    });
+    expect(dependencies.reviewQueue.add).toHaveBeenCalledWith(
+      "review-pr",
+      expect.objectContaining({
+        deliveryId: `delivery-pr-${action}`,
+        trigger,
+      }),
+      expect.objectContaining({
+        jobId: `delivery-pr-${action}:review_run_1`,
       }),
     );
 
@@ -531,6 +603,39 @@ describe("buildApiServer", () => {
         jobId: "delivery-command:review_run_1",
       }),
     );
+
+    await server.close();
+  });
+
+  it("ignores issue comments unless the body is exactly the review slash command", async () => {
+    const dependencies = createWebhookDependencies();
+    const server = buildApiServer({
+      reviewQueue: dependencies.reviewQueue,
+      store: dependencies.store,
+      webhookSecret: WEBHOOK_SECRET,
+    });
+    const payload = JSON.stringify(createIssueCommentPayload(" /diffguard review "));
+
+    const response = await server.inject({
+      headers: signedHeaders({
+        deliveryId: "delivery-command-whitespace",
+        eventName: "issue_comment",
+        payload,
+      }),
+      method: "POST",
+      payload,
+      url: "/webhooks/github",
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({ status: "ignored" });
+    expect(dependencies.store.recordDelivery).toHaveBeenCalledWith({
+      action: "created",
+      deliveryId: "delivery-command-whitespace",
+      eventName: "issue_comment",
+    });
+    expect(dependencies.store.createReviewRun).not.toHaveBeenCalled();
+    expect(dependencies.reviewQueue.add).not.toHaveBeenCalled();
 
     await server.close();
   });

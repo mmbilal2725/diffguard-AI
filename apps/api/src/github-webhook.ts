@@ -141,7 +141,7 @@ function readManualReviewRequest(payload: unknown): ReviewWebhookRequest | null 
     return null;
   }
 
-  if (parsed.data.comment.body.trim() !== ManualReviewCommand) {
+  if (parsed.data.comment.body !== ManualReviewCommand) {
     return null;
   }
 
