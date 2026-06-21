@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { DiffGuardGitHubClient } from "@diffguard/github";
+import type { FinalizeReviewRunInput } from "@diffguard/review-run";
 import type { ReviewResult } from "@diffguard/reviewer";
 
 import { createReviewProcessor } from "./review-processor.js";
@@ -15,6 +16,7 @@ describe("createReviewProcessor", () => {
     const createGitHubClient = vi.fn(() => githubClient);
     const runReviewPipeline = vi.fn(async () => ({
       context: {
+        diff: "",
         dryRun: false,
         files: [],
         pullRequest: {
@@ -114,6 +116,7 @@ describe("createReviewProcessor", () => {
     const createGitHubClient = vi.fn(() => createGitHubClientDouble());
     const runReviewPipeline = vi.fn(async () => ({
       context: {
+        diff: "diff --git a/src/admin.ts b/src/admin.ts\n@@ -10,6 +10,7 @@\n+requireAdmin(user);\n return customer;",
         dryRun: false,
         files: [
           {
@@ -254,6 +257,7 @@ describe("createReviewProcessor", () => {
   });
 
   it("finalizes GitHub App review runs with posting and persistence enabled", async () => {
+    const storedRuns: unknown[] = [];
     const createInstallationToken = vi.fn(async () => ({
       expiresAt: "2026-06-20T00:00:00Z",
       token: "ghs_installation_token",
@@ -280,19 +284,26 @@ describe("createReviewProcessor", () => {
       ],
     });
     const runReviewPipeline = vi.fn(async () => reviewResult);
-    const finalizeReviewRun = vi.fn(async () => ({
-      posted: true,
-      postedFindings: [
-        {
-          dedupeKey: "src/admin.ts:12:authorization:admin route misses authorization",
-          githubCommentId: "901",
-          line: 12,
-          path: "src/admin.ts",
-        },
-      ],
-      result: reviewResult,
-      summary: "## DiffGuard-AI Review",
-    }));
+    const finalizeReviewRun = vi.fn(async (input: FinalizeReviewRunInput) => {
+      expect(input.result).toBe(reviewResult);
+
+      return {
+        posted: true,
+        postedFindings: [
+          {
+            dedupeKey: "src/admin.ts:12:authorization:admin route misses authorization",
+            githubCommentId: "901",
+            line: 12,
+            path: "src/admin.ts",
+          },
+        ],
+        result: reviewResult,
+        summary: "## DiffGuard-AI Review",
+      };
+    });
+    const storeReviewRun = vi.fn(async (input) => {
+      storedRuns.push(input);
+    });
     const processor = createReviewProcessor({
       appId: "12345",
       createGitHubClient,
@@ -300,6 +311,7 @@ describe("createReviewProcessor", () => {
       finalizeReviewRun,
       privateKey: "private-key",
       runReviewPipeline,
+      storeReviewRun,
     });
 
     const output = await processor({
@@ -331,7 +343,67 @@ describe("createReviewProcessor", () => {
         result: reviewResult,
       }),
     );
+    const finalizeInput = finalizeReviewRun.mock.calls[0]?.[0] as
+      | FinalizeReviewRunInput
+      | undefined;
+    expect(finalizeInput).toBeDefined();
+    await finalizeInput?.storeReviewRun?.({
+      posted: true,
+      postedFindings: [
+        {
+          dedupeKey: "src/admin.ts:12:authorization:admin route misses authorization",
+          githubCommentId: "901",
+          line: 12,
+          path: "src/admin.ts",
+        },
+      ],
+      result: reviewResult,
+    });
+    expect(storedRuns).toEqual([
+      expect.objectContaining({
+        posted: true,
+        reviewRunId: "review_run_1",
+      }),
+    ]);
     expect(output).toEqual({ findings: 1, reviewRunId: "review_run_1" });
+  });
+
+  it("marks the queued review run as failed when processing throws", async () => {
+    const failure = new Error("GitHub diff fetch failed");
+    const markReviewRunFailed = vi.fn(async () => undefined);
+    const processor = createReviewProcessor({
+      appId: "12345",
+      createGitHubClient: vi.fn(() => createGitHubClientDouble()),
+      createInstallationToken: vi.fn(async () => ({
+        expiresAt: "2026-06-20T00:00:00Z",
+        token: "ghs_installation_token",
+      })),
+      markReviewRunFailed,
+      privateKey: "private-key",
+      runReviewPipeline: vi.fn(async () => {
+        throw failure;
+      }),
+    });
+
+    await expect(
+      processor({
+        data: {
+          deliveryId: "delivery-1",
+          headSha: "head-sha",
+          installationId: "98765",
+          owner: "acme",
+          pullNumber: 42,
+          repo: "widgets",
+          reviewRunId: "review_run_1",
+          trigger: "pull_request.opened",
+        },
+      }),
+    ).rejects.toThrow("GitHub diff fetch failed");
+
+    expect(markReviewRunFailed).toHaveBeenCalledWith({
+      error: failure,
+      reviewRunId: "review_run_1",
+    });
   });
 
   it("fails before processing when GitHub App credentials are missing", async () => {
@@ -365,6 +437,7 @@ describe("createReviewProcessor", () => {
 function createReviewResult(overrides: Partial<ReviewResult> = {}): ReviewResult {
   return {
     context: {
+      diff: "diff --git a/src/admin.ts b/src/admin.ts\n@@ -10,6 +10,7 @@\n+requireAdmin(user);\n return customer;",
       dryRun: false,
       files: [
         {

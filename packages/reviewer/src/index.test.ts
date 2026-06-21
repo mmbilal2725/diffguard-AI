@@ -44,6 +44,7 @@ const changedFile: PullRequestFile = {
 describe("review pipeline", () => {
   it("builds review context from pull request metadata, changed files, and rules", () => {
     const context = buildReviewContext({
+      diff: "diff --git a/src/widgets.ts b/src/widgets.ts",
       dryRun: true,
       files: [changedFile],
       owner: "acme",
@@ -54,6 +55,7 @@ describe("review pipeline", () => {
     });
 
     expect(context.ref).toEqual({ owner: "acme", repo: "widgets", number: 42 });
+    expect(context.diff).toBe("diff --git a/src/widgets.ts b/src/widgets.ts");
     expect(context.pullRequest.headSha).toBe("head-sha");
     expect(context.files).toHaveLength(1);
     expect(context.rules).toEqual({
@@ -424,6 +426,7 @@ describe("review pipeline", () => {
     expect(result.timings.map((timing) => timing.stage)).toEqual([
       "fetch_pull_request",
       "list_changed_files",
+      "fetch_pull_request_diff",
       "read_rules",
       "build_context",
       "static_checks",
@@ -498,12 +501,16 @@ function createGitHubClientDouble(
   const rules = input.rules === undefined ? "Only comment when confidence is high." : input.rules;
 
   return {
+    fetchPullRequestDiff: async () => ({
+      ok: true,
+      data: `diff --git a/src/widgets.ts b/src/widgets.ts\n${changedFile.patch}`,
+    }),
     getPullRequestMetadata: async () => ({ ok: true, data: pullRequest }),
     listPullRequestFiles: async () => ({ ok: true, data: files }),
     readDiffGuardRules: async () => ({ ok: true, data: rules }),
   } satisfies Pick<
     DiffGuardGitHubClient,
-    "getPullRequestMetadata" | "listPullRequestFiles" | "readDiffGuardRules"
+    "fetchPullRequestDiff" | "getPullRequestMetadata" | "listPullRequestFiles" | "readDiffGuardRules"
   >;
 }
 

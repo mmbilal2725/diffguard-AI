@@ -675,6 +675,7 @@ function createEvalGitHubClient(evalCase: EvalCase): ReviewPipelineGitHubClient 
   };
 
   return {
+    fetchPullRequestDiff: async () => ({ ok: true, data: evalCase.diff }),
     getPullRequestMetadata: async () => ({ ok: true, data: pullRequest }),
     listPullRequestFiles: async () => ({ ok: true, data: [file] }),
     readDiffGuardRules: async () => ({ ok: true, data: evalCase.repoRules }),

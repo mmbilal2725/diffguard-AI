@@ -50,8 +50,13 @@ See [docs/demo.md](docs/demo.md) for the complete local demo script.
 - Cost, latency, token usage, model name, prompt version, and validator rejection tracking.
 - Resolution-rate approximation for posted findings after later PR updates.
 - Offline eval suite for precision, recall, false positives, false negatives, validator rejection rate, cost, and latency.
+- Persisted eval summaries in Prisma, exposed through the dashboard API.
+- Dashboard API authentication with server-side bearer credentials.
+- Browser origin allowlisting and per-client API rate limiting.
 
-Current status: the platform foundations are implemented across the monorepo. The CLI wires the structured LLM reviewer when `OPENAI_API_KEY` is configured, while the default static checks remain silent and the validator still rejects unvalidated candidates. DiffGuard-AI prefers no comment over an unvalidated or speculative comment.
+Current status: the platform foundations are implemented across the monorepo. The CLI and GitHub App worker wire the structured LLM reviewer when `OPENAI_API_KEY` is configured, run the selected LLM review passes, validate findings, dedupe candidates, post GitHub comments when not in dry-run mode, and persist review/eval summaries when `DATABASE_URL` is configured. DiffGuard-AI still prefers no comment over an unvalidated or speculative comment.
+
+Production-readiness status: this is ready for serious local testing and controlled beta deployments. The repo now includes signed GitHub webhook verification, duplicate delivery handling, short-lived GitHub App installation tokens, dashboard API authentication, CORS/origin controls, request rate limiting, Prisma persistence, and repo-wide verification coverage. It is not yet a fully hardened multi-tenant SaaS service: deployment automation, hosted auth/tenant management, observability, alerting, backup/restore procedures, and marketplace-grade installation flows are still roadmap items.
 
 ## Architecture
 
@@ -66,8 +71,11 @@ flowchart LR
   Reviewer --> LLMPkg["packages/llm<br/>prompts, JSON schemas, telemetry"]
   Reviewer --> Metrics["quality metrics<br/>findings, rejects, cost, latency"]
   Reviewer --> Comments["GitHub review comments"]
-  Metrics --> Web["apps/web<br/>dashboard"]
+  Metrics --> DB
+  DB --> API
+  API --> Web["apps/web<br/>dashboard"]
   Evals["packages/evals<br/>offline cases and CI reports"] --> Reviewer
+  Evals --> DB
 ```
 
 The repository is a TypeScript/pnpm monorepo:
@@ -92,7 +100,7 @@ See [docs/architecture.md](docs/architecture.md) for more detail.
 2. DiffGuard-AI fetches PR metadata, changed files, and raw diff context.
 3. The context builder loads `.diffguard-rules.md` from the PR head when present.
 4. Static checks run first and can emit structured candidate findings.
-5. LLM review passes inspect the diff with specialized prompt templates. The CLI runs `logic-bugs`, `security-bugs`, and `regression-test-gaps` when `OPENAI_API_KEY` is present.
+5. LLM review passes inspect the diff with specialized prompt templates. The CLI and worker run `logic-bugs`, `security-bugs`, and `regression-test-gaps` when `OPENAI_API_KEY` is present, unless `DIFFGUARD_REVIEW_PASSES` selects a comma-separated subset.
 6. Candidate findings are parsed and validated with Zod.
 7. A validator pass checks whether each finding is real, actionable, and safe to post.
 8. Duplicate findings are removed.
@@ -101,6 +109,31 @@ See [docs/architecture.md](docs/architecture.md) for more detail.
 11. Metrics and eval data are stored for dashboarding and regression checks.
 
 The default validator rejects findings when no validator is configured. This is deliberate: the project optimizes for high-confidence review comments over volume.
+
+If `OPENAI_API_KEY` is not configured, DiffGuard-AI skips LLM review safely and emits a clear warning instead of posting speculative comments.
+
+## Dashboard And API
+
+The dashboard is API-backed by `apps/api` and uses server-side requests from `apps/web`.
+
+Implemented dashboard endpoints:
+
+- `GET /dashboard/overview`
+- `GET /dashboard/review-runs`
+- `GET /dashboard/review-runs/:id`
+- `GET /dashboard/repositories`
+- `GET /dashboard/findings`
+- `GET /dashboard/evals`
+
+Dashboard API access requires `DIFFGUARD_DASHBOARD_API_KEY`. Configure the same value for `apps/api` and `apps/web`; the web app sends it server-side as `Authorization: Bearer ...`. Do not expose this value with a `NEXT_PUBLIC_*` variable.
+
+`apps/api` also enforces browser origin allowlisting and rate limits:
+
+- `DIFFGUARD_ALLOWED_ORIGINS`: comma-separated browser origins allowed to call the API.
+- `DIFFGUARD_RATE_LIMIT_MAX_REQUESTS`: default `120`.
+- `DIFFGUARD_RATE_LIMIT_WINDOW_MS`: default `60000`.
+
+Server-to-server requests without an `Origin` header are allowed. Local mock dashboard fallback exists only when `DIFFGUARD_DEMO_MODE=true`.
 
 ## Evals
 
@@ -138,6 +171,8 @@ pnpm.cmd --filter @diffguard/cli start -- eval run --model gpt-5.5 --prompt-vers
 ```
 
 See [docs/evals.md](docs/evals.md).
+
+When `DATABASE_URL` is configured, `diffguard-ai eval run` stores a summary row in Prisma. The dashboard reads those persisted summaries from `/dashboard/evals`.
 
 ## Local Setup
 
@@ -210,6 +245,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          DIFFGUARD_REVIEW_PASSES: logic-bugs,security-bugs,regression-test-gaps
 ```
 
 For local action development from this checkout, point `uses:` at the local action path instead. See [docs/github-action.md](docs/github-action.md).
@@ -234,8 +270,13 @@ REVIEW_QUEUE_NAME="diffguard-review-runs"
 GITHUB_APP_ID="12345"
 GITHUB_APP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
 GITHUB_WEBHOOK_SECRET="use-a-long-random-secret"
+DIFFGUARD_DASHBOARD_API_KEY="use-a-different-long-random-secret"
+DIFFGUARD_ALLOWED_ORIGINS="https://YOUR_DASHBOARD_HOST"
+DIFFGUARD_RATE_LIMIT_MAX_REQUESTS="120"
+DIFFGUARD_RATE_LIMIT_WINDOW_MS="60000"
 OPENAI_API_KEY=""
 OPENAI_RESOLUTION_MODEL=""
+DIFFGUARD_REVIEW_PASSES="logic-bugs,security-bugs,regression-test-gaps"
 ```
 
 The API verifies `x-hub-signature-256`, deduplicates `x-github-delivery`, queues BullMQ review jobs, and uses short-lived installation tokens in the worker. See [docs/github-app.md](docs/github-app.md).
@@ -255,7 +296,8 @@ Repos using DiffGuard-AI can define custom review rules in `.diffguard-rules.md`
 
 ## Roadmap
 
-- GitHub App deployment hardening and marketplace-ready installation flow.
+- Deployment automation, observability, alerting, and backup/restore runbooks.
+- Hosted dashboard auth, tenant/repo isolation, and marketplace-ready installation flow.
 - Inline comment mapping improvements for complex diffs.
 - Autofix suggestions with explicit human approval.
 - Sandboxed test execution for changed code.

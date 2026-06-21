@@ -199,6 +199,48 @@ export const REVIEW_PROMPT_TEMPLATES: Record<ReviewPromptTemplateId, ReviewPromp
   },
 };
 
+export const DEFAULT_REVIEW_PASSES = [
+  "logic-bugs",
+  "security-bugs",
+  "regression-test-gaps",
+] as const satisfies readonly ReviewPromptTemplateId[];
+
+export const OPENAI_API_KEY_MISSING_WARNING =
+  "OPENAI_API_KEY is not configured; skipping LLM review safely.";
+
+export function parseReviewPasses(value: string | undefined): ReviewPromptTemplateId[] {
+  if (value === undefined || value.trim() === "") {
+    return [...DEFAULT_REVIEW_PASSES];
+  }
+
+  const selected: ReviewPromptTemplateId[] = [];
+  const seen = new Set<ReviewPromptTemplateId>();
+
+  for (const rawPass of value.split(",")) {
+    const pass = rawPass.trim();
+    if (pass === "") {
+      continue;
+    }
+
+    if (!isReviewPromptTemplateId(pass)) {
+      throw new Error(
+        `Invalid DIFFGUARD_REVIEW_PASSES value. Unsupported review pass: ${pass}. Supported passes: ${DEFAULT_REVIEW_PASSES.join(", ")}.`,
+      );
+    }
+
+    if (!seen.has(pass)) {
+      selected.push(pass);
+      seen.add(pass);
+    }
+  }
+
+  return selected.length > 0 ? selected : [...DEFAULT_REVIEW_PASSES];
+}
+
+function isReviewPromptTemplateId(value: string): value is ReviewPromptTemplateId {
+  return Object.prototype.hasOwnProperty.call(REVIEW_PROMPT_TEMPLATES, value);
+}
+
 export type TokenUsage = {
   inputTokens: number;
   outputTokens: number;

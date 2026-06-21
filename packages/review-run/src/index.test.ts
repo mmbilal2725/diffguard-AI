@@ -15,6 +15,7 @@ import {
   buildMarkdownSummary,
   finalizeReviewRun,
   loadPostedFindingDedupeKeysFromDatabase,
+  markReviewRunFailedInDatabase,
   storeReviewRunInDatabase,
   type PrismaClientLike,
 } from "./index.js";
@@ -179,6 +180,120 @@ describe("review-run finalization", () => {
     expect(prisma.disconnected).toBe(true);
   });
 
+  it("updates an existing queued review run and stores model-call telemetry", async () => {
+    const calls: string[] = [];
+    const prisma = createPrismaDouble(calls);
+
+    await storeReviewRunInDatabase({
+      database: prisma,
+      posted: true,
+      postedFindings: [
+        {
+          dedupeKey: "src/admin.ts:12:authorization:admin route misses authorization",
+          githubCommentId: "901",
+          line: 12,
+          path: "src/admin.ts",
+        },
+      ],
+      result: createReviewResult({
+        findings: [createFinding()],
+        modelCalls: [
+          {
+            attempt: 1,
+            costUsd: 0.00042,
+            latencyMs: 1200,
+            model: "gpt-test",
+            promptVersion: "review-v1",
+            provider: "openai",
+            status: "succeeded",
+            tokenUsage: {
+              inputTokens: 100,
+              outputTokens: 20,
+              totalTokens: 120,
+            },
+          },
+          {
+            attempt: 1,
+            costUsd: 0,
+            latencyMs: 600,
+            model: "gpt-test",
+            promptVersion: "review-v1",
+            provider: "openai",
+            status: "invalid_output",
+            tokenUsage: {
+              inputTokens: 50,
+              outputTokens: 10,
+              totalTokens: 60,
+            },
+          },
+        ],
+      }),
+      reviewRunId: "review_run_existing",
+    });
+
+    expect(calls).toEqual([
+      "repository.upsert",
+      "pullRequest.upsert",
+      "reviewRun.update",
+      "finding.createMany",
+      "modelCall.createMany",
+    ]);
+    expect(prisma.reviewRunUpdateInput).toMatchObject({
+      data: {
+        findingsDetected: 2,
+        findingsPosted: 1,
+        status: "COMPLETED",
+        totalCostUsd: 0.00042,
+        validatorRejectionRate: 0,
+      },
+      where: { id: "review_run_existing" },
+    });
+    expect(prisma.findingCreateManyInput?.data[0]).toMatchObject({
+      reviewRunId: "review_run_existing",
+      status: "POSTED",
+    });
+    expect(prisma.modelCallCreateManyInput?.data).toEqual([
+      expect.objectContaining({
+        costUsd: 0.00042,
+        errorCode: undefined,
+        inputTokens: 100,
+        modelName: "gpt-test",
+        outputTokens: 20,
+        promptVersion: "review-v1",
+        provider: "openai",
+        reviewRunId: "review_run_existing",
+        status: "SUCCEEDED",
+        totalTokens: 120,
+      }),
+      expect.objectContaining({
+        errorCode: "invalid_output",
+        reviewRunId: "review_run_existing",
+        status: "FAILED",
+      }),
+    ]);
+    expect(prisma.disconnected).toBe(true);
+  });
+
+  it("marks existing review runs failed in Prisma", async () => {
+    const calls: string[] = [];
+    const prisma = createPrismaDouble(calls);
+
+    await markReviewRunFailedInDatabase({
+      database: prisma,
+      reviewRunId: "review_run_existing",
+    });
+
+    expect(calls).toEqual(["reviewRun.update"]);
+    expect(prisma.reviewRunUpdateInput).toMatchObject({
+      data: {
+        status: "FAILED",
+      },
+      where: { id: "review_run_existing" },
+    });
+    expect(prisma.reviewRunUpdateInput?.data.completedAt).toBeInstanceOf(Date);
+    expect(prisma.disconnected).toBe(true);
+  });
+
   it("loads posted finding dedupe keys from Prisma", async () => {
     const prisma = createPrismaDouble([]);
     prisma.findingFindManyResult = [
@@ -270,6 +385,7 @@ function createGitHubClientDouble(input: {
 function createReviewResult(
   overrides: {
     findings?: ReviewResult["findings"];
+    modelCalls?: ReviewResult["modelCalls"];
   } = {},
 ): ReviewResult {
   const findings = overrides.findings ?? [
@@ -292,6 +408,12 @@ function createReviewResult(
 
   return {
     context: {
+      diff: [
+        "diff --git a/src/admin.ts b/src/admin.ts",
+        "@@ -10,2 +10,3 @@\n const role = user.role;\n+return customer;\n requireAdmin();",
+        "diff --git a/src/widget.ts b/src/widget.ts",
+        "@@ -19,2 +19,3 @@\n const widget = findWidget();\n+return widget.name;\n return fallback;",
+      ].join("\n"),
       dryRun: false,
       files: [
         {
@@ -323,7 +445,7 @@ function createReviewResult(
     },
     dryRun: false,
     findings,
-    modelCalls: [],
+    modelCalls: overrides.modelCalls ?? [],
     pullRequest,
     rejectedFindings: [{ reason: "low_confidence", title: "Speculative issue" }],
     timings: [
@@ -361,17 +483,23 @@ function createPrismaDouble(calls: string[]): PrismaClientLike & {
   findingCreateManyInput?: Parameters<PrismaClientLike["finding"]["createMany"]>[0];
   findingFindManyInput?: Parameters<PrismaClientLike["finding"]["findMany"]>[0];
   findingFindManyResult: Array<{ dedupeKey: string }>;
+  modelCallCreateManyInput?: Parameters<PrismaClientLike["modelCall"]["createMany"]>[0];
+  reviewRunUpdateInput?: Parameters<PrismaClientLike["reviewRun"]["update"]>[0];
 } {
   const prisma: PrismaClientLike & {
     disconnected: boolean;
     findingCreateManyInput?: Parameters<PrismaClientLike["finding"]["createMany"]>[0];
     findingFindManyInput?: Parameters<PrismaClientLike["finding"]["findMany"]>[0];
     findingFindManyResult: Array<{ dedupeKey: string }>;
+    modelCallCreateManyInput?: Parameters<PrismaClientLike["modelCall"]["createMany"]>[0];
+    reviewRunUpdateInput?: Parameters<PrismaClientLike["reviewRun"]["update"]>[0];
   } = {
     disconnected: false,
     findingCreateManyInput: undefined,
     findingFindManyInput: undefined,
     findingFindManyResult: [],
+    modelCallCreateManyInput: undefined,
+    reviewRunUpdateInput: undefined,
     async $disconnect() {
       prisma.disconnected = true;
     },
@@ -383,6 +511,12 @@ function createPrismaDouble(calls: string[]): PrismaClientLike & {
       findMany: async (input) => {
         prisma.findingFindManyInput = input;
         return prisma.findingFindManyResult;
+      },
+    },
+    modelCall: {
+      createMany: async (input) => {
+        calls.push("modelCall.createMany");
+        prisma.modelCallCreateManyInput = input;
       },
     },
     pullRequest: {
@@ -401,6 +535,11 @@ function createPrismaDouble(calls: string[]): PrismaClientLike & {
       create: async () => {
         calls.push("reviewRun.create");
         return { id: "review_run_1" };
+      },
+      update: async (input) => {
+        calls.push("reviewRun.update");
+        prisma.reviewRunUpdateInput = input;
+        return { id: input.where.id };
       },
     },
   };

@@ -90,7 +90,7 @@ export type ModelCallTelemetry = {
 
 export type ReviewPipelineGitHubClient = Pick<
   DiffGuardGitHubClient,
-  "getPullRequestMetadata" | "listPullRequestFiles" | "readDiffGuardRules"
+  "fetchPullRequestDiff" | "getPullRequestMetadata" | "listPullRequestFiles" | "readDiffGuardRules"
 >;
 
 export type GitHubAuthContext =
@@ -104,6 +104,7 @@ export type GitHubAuthContext =
     };
 
 export type BuildReviewContextInput = {
+  diff: string;
   dryRun: boolean;
   files: PullRequestFile[];
   owner: string;
@@ -114,6 +115,7 @@ export type BuildReviewContextInput = {
 };
 
 export type ReviewContext = {
+  diff: string;
   dryRun: boolean;
   files: PullRequestFile[];
   pullRequest: PullRequestMetadata;
@@ -128,6 +130,7 @@ export type ReviewContext = {
 export type PipelineStage =
   | "fetch_pull_request"
   | "list_changed_files"
+  | "fetch_pull_request_diff"
   | "read_rules"
   | "build_context"
   | "static_checks"
@@ -220,6 +223,7 @@ export function isPostableFinding(candidate: PostableFindingCandidate): boolean 
 export function buildReviewContext(input: BuildReviewContextInput): ReviewContext {
   return {
     dryRun: input.dryRun,
+    diff: input.diff,
     files: [...input.files],
     pullRequest: input.pullRequest,
     ref: {
@@ -256,6 +260,10 @@ export async function runReviewPipeline(input: RunReviewPipelineInput): Promise<
     ),
   );
 
+  const diff = await recordStage(timings, "fetch_pull_request_diff", async () =>
+    unwrapGitHubResult(await github.fetchPullRequestDiff(ref), "Failed to fetch pull request diff."),
+  );
+
   const rules = await recordStage(timings, "read_rules", async () => {
     const result = await github.readDiffGuardRules({
       owner: parsedInput.owner,
@@ -273,6 +281,7 @@ export async function runReviewPipeline(input: RunReviewPipelineInput): Promise<
   const context = await recordStage(timings, "build_context", async () =>
     buildReviewContext({
       dryRun: parsedInput.dryRun,
+      diff,
       files,
       owner: parsedInput.owner,
       pullNumber: parsedInput.pullNumber,
@@ -616,6 +625,10 @@ function readCandidateTitle(candidate: unknown): string | undefined {
 }
 
 function buildPullRequestDiff(context: ReviewContext): string {
+  if (context.diff.trim().length > 0) {
+    return context.diff;
+  }
+
   if (context.files.length === 0) {
     return "No changed files.";
   }

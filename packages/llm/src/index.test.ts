@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   LlmValidationError,
+  OPENAI_API_KEY_MISSING_WARNING,
   REVIEW_PROMPT_VERSION,
   REVIEW_PROMPT_TEMPLATES,
   RESOLUTION_VALIDATOR_PROMPT_VERSION,
   createReviewPromptInput,
+  parseReviewPasses,
   reviewDiffWithLlm,
   validateFindingResolutionWithLlm,
   type LlmProvider,
@@ -34,6 +36,34 @@ describe("REVIEW_PROMPT_TEMPLATES", () => {
     expect(REVIEW_PROMPT_TEMPLATES["logic-bugs"].version).toBe(REVIEW_PROMPT_VERSION);
     expect(REVIEW_PROMPT_TEMPLATES["security-bugs"].system).toContain("security");
     expect(REVIEW_PROMPT_TEMPLATES["regression-test-gaps"].system).toContain("tests");
+  });
+});
+
+describe("parseReviewPasses", () => {
+  it("defaults to all supported low-noise review passes", () => {
+    expect(parseReviewPasses(undefined)).toEqual([
+      "logic-bugs",
+      "security-bugs",
+      "regression-test-gaps",
+    ]);
+  });
+
+  it("parses DIFFGUARD_REVIEW_PASSES and deduplicates in order", () => {
+    expect(parseReviewPasses(" security-bugs,logic-bugs,security-bugs ")).toEqual([
+      "security-bugs",
+      "logic-bugs",
+    ]);
+  });
+
+  it("rejects unsupported review pass names clearly", () => {
+    expect(() => parseReviewPasses("style-only")).toThrow(
+      "Unsupported review pass: style-only",
+    );
+  });
+
+  it("exports a clear warning for missing OPENAI_API_KEY", () => {
+    expect(OPENAI_API_KEY_MISSING_WARNING).toContain("OPENAI_API_KEY");
+    expect(OPENAI_API_KEY_MISSING_WARNING).toContain("skipping LLM review");
   });
 });
 

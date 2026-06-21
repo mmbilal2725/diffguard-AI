@@ -17,9 +17,11 @@ The pipeline flow is:
 5. Run static checks. The default runner is a no-op until concrete checks are
    configured.
 6. Run LLM review candidates. The default package runner is a no-op; callers can
-   inject one or more structured LLM review passes. The CLI injects the
-   `packages/llm` reviewer when `OPENAI_API_KEY` is configured and runs
-   `logic-bugs`, `security-bugs`, and `regression-test-gaps`.
+   inject one or more structured LLM review passes. The CLI and GitHub App
+   worker inject the `packages/llm` reviewer when `OPENAI_API_KEY` is
+   configured. By default they run `logic-bugs`, `security-bugs`, and
+   `regression-test-gaps`. Set `DIFFGUARD_REVIEW_PASSES` to a comma-separated
+   subset, such as `security-bugs,regression-test-gaps`, to limit the passes.
 7. Validate reviewer output with Zod.
 8. Call the finding validator for every parsed candidate. The validator receives
    the PR diff, relevant file patch context, `.diffguard-rules.md` content,
@@ -45,3 +47,10 @@ cannot be mapped inline, and stores review-run/finding records. The CLI and
 GitHub App worker both use this shared finalization package. If no validator is
 configured, the default validator rejects candidates so DiffGuard-AI prefers
 silence over posting unvalidated comments.
+
+If `OPENAI_API_KEY` is missing, CLI and worker mode do not call the LLM provider.
+They return or log a clear warning that `OPENAI_API_KEY` is not configured and
+LLM review is being skipped safely, then continue without speculative comments.
+Structured LLM output is always parsed through `ReviewFindingOutputSchema`;
+invalid mocked or real model responses are rejected before findings reach
+validator, deduplication, or posting.

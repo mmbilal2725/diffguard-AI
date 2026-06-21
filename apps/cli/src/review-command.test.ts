@@ -465,6 +465,34 @@ describe("review command", () => {
     expect(storedRuns).toEqual([]);
   });
 
+  it("warns and skips LLM review safely when OPENAI_API_KEY is missing", async () => {
+    const dependencies = createDependencies({
+      env: {
+        GITHUB_TOKEN: "ghs_token",
+      },
+    });
+
+    const result = await runReviewCommand(
+      {
+        dryRun: true,
+        minConfidence: 0.7,
+        output: "json",
+        owner: "acme",
+        pullNumber: 42,
+        repo: "widgets",
+      },
+      dependencies,
+    );
+
+    expect(dependencies.runReviewPipelineCalls[0]).not.toHaveProperty("llmReviewer");
+    expect(result.warnings).toEqual([
+      "OPENAI_API_KEY is not configured; skipping LLM review safely.",
+    ]);
+    expect(JSON.parse(result.output)).toMatchObject({
+      warnings: ["OPENAI_API_KEY is not configured; skipping LLM review safely."],
+    });
+  });
+
   it("uses OPENAI_API_KEY to run the default pipeline through three LLM review passes without posting in dry-run", async () => {
     const postedComments: PostPullRequestCommentInput[] = [];
     const createdReviews: CreatePullRequestReviewInput[] = [];
@@ -563,6 +591,86 @@ describe("review command", () => {
     expect(postedComments).toEqual([]);
   });
 
+  it("rejects invalid mocked LLM responses before returning findings", async () => {
+    const provider = createFakeLlmProvider([
+      {
+        findings: [{ title: "Invalid output missing required fields" }],
+      },
+      {
+        findings: [{ title: "Still invalid after retry" }],
+      },
+    ]);
+    const dependencies = createDependencies({
+      createLlmProvider: () => provider,
+      env: {
+        GITHUB_TOKEN: "ghs_token",
+        OPENAI_API_KEY: "sk-test",
+      },
+      runReviewPipeline: undefined,
+    });
+
+    await expect(
+      runReviewCommand(
+        {
+          dryRun: true,
+          minConfidence: 0.7,
+          output: "json",
+          owner: "acme",
+          pullNumber: 42,
+          repo: "widgets",
+        },
+        dependencies,
+      ),
+    ).rejects.toThrow("LLM structured output did not match the ReviewFinding schema.");
+  });
+
+  it("runs only the selected DIFFGUARD_REVIEW_PASSES", async () => {
+    const provider = createFakeLlmProvider([
+      {
+        findings: [
+          createFinding({
+            category: "authorization",
+            title: "Admin route returns data before auth",
+          }),
+        ],
+      },
+    ]);
+    const dependencies = createDependencies({
+      createLlmProvider: () => provider,
+      env: {
+        DIFFGUARD_REVIEW_PASSES: "security-bugs",
+        GITHUB_TOKEN: "ghs_token",
+        OPENAI_API_KEY: "sk-test",
+      },
+      findingValidator: async () => ({
+        confidence: 0.96,
+        falsePositiveRisk: "low",
+        reason: "The changed-code evidence supports posting this candidate.",
+        shouldPost: true,
+        valid: true,
+      }),
+      runReviewPipeline: undefined,
+    });
+
+    const result = await runReviewCommand(
+      {
+        dryRun: true,
+        minConfidence: 0.7,
+        output: "json",
+        owner: "acme",
+        pullNumber: 42,
+        repo: "widgets",
+      },
+      dependencies,
+    );
+
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0]?.messages[0]?.content).toContain("Focus on security bugs");
+    expect(JSON.parse(result.output)).toMatchObject({
+      modelCalls: [expect.objectContaining({ templateId: "security-bugs" })],
+    });
+  });
+
   it("formats a low-noise markdown summary", () => {
     const summary = buildMarkdownSummary(createReviewResult(), {
       dryRun: true,
@@ -606,6 +714,10 @@ function createDependencies(
         },
       };
     },
+    fetchPullRequestDiff: async () => ({
+      ok: true,
+      data: createReviewResult().context.diff,
+    }),
     getPullRequestMetadata: async () => ({
       ok: true,
       data: pullRequest,
@@ -722,6 +834,7 @@ function createReviewResult(
 
   return {
     context: {
+      diff: files.map((file) => file.patch ?? "").join("\n\n"),
       dryRun: true,
       files,
       pullRequest,
@@ -768,7 +881,7 @@ function createFinding(overrides: Partial<ReviewResult["findings"][number]> = {}
 }
 
 type FakeLlmOutput = {
-  findings: ReviewResult["findings"];
+  findings: unknown[];
 };
 
 type CapturedLlmRequest = Parameters<LlmProvider["generateJson"]>[0];

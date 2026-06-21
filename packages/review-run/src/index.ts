@@ -20,6 +20,7 @@ export type StoreReviewRunInput = {
   posted: boolean;
   postedFindings?: PostedReviewFinding[];
   result: ReviewResult;
+  reviewRunId?: string;
 };
 
 export type ReviewSummaryOptions = {
@@ -104,6 +105,24 @@ export type PrismaClientLike = {
       };
     }): Promise<Array<{ dedupeKey: string }>>;
   };
+  modelCall: {
+    createMany(input: {
+      data: Array<{
+        costUsd: number;
+        errorCode?: string;
+        inputTokens: number;
+        latencyMs: number;
+        modelName: string;
+        outputTokens: number;
+        promptVersion: string;
+        provider: string;
+        reviewRunId: string;
+        status: string;
+        totalTokens: number;
+      }>;
+      skipDuplicates: boolean;
+    }): Promise<unknown>;
+  };
   pullRequest: {
     upsert(input: {
       create: {
@@ -155,7 +174,23 @@ export type PrismaClientLike = {
         pullRequestId: string;
         startedAt: Date;
         status: string;
+        totalCostUsd: number;
         validatorRejectionRate?: number;
+      };
+    }): Promise<PrismaReviewRun>;
+    update(input: {
+      data: {
+        completedAt?: Date;
+        findingsDetected?: number;
+        findingsPosted?: number;
+        latencyMs?: number;
+        startedAt?: Date;
+        status: string;
+        totalCostUsd?: number;
+        validatorRejectionRate?: number;
+      };
+      where: {
+        id: string;
       };
     }): Promise<PrismaReviewRun>;
   };
@@ -391,18 +426,28 @@ export async function storeReviewRunInDatabase(input: StoreReviewRunInput & {
     });
     const startedAt = readFirstStartedAt(input.result);
     const completedAt = readLastCompletedAt(input.result);
-    const reviewRun = await database.reviewRun.create({
-      data: {
-        completedAt,
-        findingsDetected: input.result.findings.length + input.result.rejectedFindings.length,
-        findingsPosted: input.posted ? input.result.findings.length : 0,
-        latencyMs: input.result.timings.reduce((total, timing) => total + timing.durationMs, 0),
-        pullRequestId: pullRequest.id,
-        startedAt,
-        status: "COMPLETED",
-        validatorRejectionRate: calculateValidatorRejectionRate(input.result),
-      },
-    });
+    const reviewRunData = {
+      completedAt,
+      findingsDetected: input.result.findings.length + input.result.rejectedFindings.length,
+      findingsPosted: input.posted ? input.result.findings.length : 0,
+      latencyMs: input.result.timings.reduce((total, timing) => total + timing.durationMs, 0),
+      startedAt,
+      status: "COMPLETED",
+      totalCostUsd: calculateTotalModelCost(input.result),
+      validatorRejectionRate: calculateValidatorRejectionRate(input.result),
+    };
+    const reviewRun =
+      input.reviewRunId === undefined
+        ? await database.reviewRun.create({
+            data: {
+              ...reviewRunData,
+              pullRequestId: pullRequest.id,
+            },
+          })
+        : await database.reviewRun.update({
+            data: reviewRunData,
+            where: { id: input.reviewRunId },
+          });
 
     if (input.result.findings.length > 0) {
       const postedFindingByDedupeKey = new Map(
@@ -441,6 +486,46 @@ export async function storeReviewRunInDatabase(input: StoreReviewRunInput & {
         skipDuplicates: true,
       });
     }
+
+    if (input.result.modelCalls.length > 0) {
+      await database.modelCall.createMany({
+        data: input.result.modelCalls.map((modelCall) => ({
+          costUsd: modelCall.costUsd,
+          errorCode: toModelCallErrorCode(modelCall.status),
+          inputTokens: modelCall.tokenUsage.inputTokens,
+          latencyMs: modelCall.latencyMs,
+          modelName: modelCall.model,
+          outputTokens: modelCall.tokenUsage.outputTokens,
+          promptVersion: modelCall.promptVersion,
+          provider: modelCall.provider,
+          reviewRunId: reviewRun.id,
+          status: toPrismaModelCallStatus(modelCall.status),
+          totalTokens: modelCall.tokenUsage.totalTokens,
+        })),
+        skipDuplicates: true,
+      });
+    }
+  } finally {
+    await database.$disconnect();
+  }
+}
+
+export async function markReviewRunFailedInDatabase(input: {
+  database?: Pick<PrismaClientLike, "$disconnect" | "reviewRun">;
+  reviewRunId: string;
+}): Promise<void> {
+  const database = input.database ?? (await createDefaultDatabaseClient());
+
+  try {
+    await database.reviewRun.update({
+      data: {
+        completedAt: new Date(),
+        status: "FAILED",
+      },
+      where: {
+        id: input.reviewRunId,
+      },
+    });
   } finally {
     await database.$disconnect();
   }
@@ -667,6 +752,18 @@ function calculateValidatorRejectionRate(result: ReviewResult): number | undefin
   }
 
   return validationRejections / total;
+}
+
+function calculateTotalModelCost(result: ReviewResult): number {
+  return result.modelCalls.reduce((total, call) => total + call.costUsd, 0);
+}
+
+function toPrismaModelCallStatus(status: string): string {
+  return status === "succeeded" ? "SUCCEEDED" : "FAILED";
+}
+
+function toModelCallErrorCode(status: string): string | undefined {
+  return status === "succeeded" ? undefined : status;
 }
 
 function isValidatorRejection(finding: RejectedFinding): boolean {

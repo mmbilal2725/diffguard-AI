@@ -1,7 +1,6 @@
 import {
   createGitHubClient,
   type DiffGuardGitHubClient,
-  type PullRequestFile,
   type PullRequestRef,
 } from "@diffguard/github";
 import {
@@ -19,7 +18,9 @@ import {
   type StoreReviewRunInput,
 } from "@diffguard/review-run";
 import {
+  OPENAI_API_KEY_MISSING_WARNING,
   createOpenAIProvider,
+  parseReviewPasses,
   reviewDiffWithLlm,
   type LlmProvider,
   type ReviewPromptTemplateId,
@@ -28,11 +29,6 @@ import { z } from "zod";
 
 const DEFAULT_MIN_CONFIDENCE = 0.7;
 const DEFAULT_OUTPUT_FORMAT = "markdown";
-const REVIEW_TEMPLATE_IDS = [
-  "logic-bugs",
-  "security-bugs",
-  "regression-test-gaps",
-] as const satisfies readonly ReviewPromptTemplateId[];
 
 export { buildMarkdownSummary };
 
@@ -55,6 +51,7 @@ export type ReviewCommandResult = {
   posted: boolean;
   reviewResult: ReviewResult;
   summary: string;
+  warnings: string[];
 };
 
 export type ReviewCommandDependencies = {
@@ -109,6 +106,11 @@ export async function runReviewCommand(
   const githubClientFactory = dependencies.createGitHubClient ?? createGitHubClient;
   const githubClient = githubClientFactory({ authToken });
   const pipeline = dependencies.runReviewPipeline ?? runReviewPipeline;
+  const llmReviewerSetup = buildDefaultLlmReviewerInput({
+    createLlmProvider: dependencies.createLlmProvider,
+    env,
+    model: options.model,
+  });
   const pipelineInput: RunReviewPipelineInput = {
     confidenceThreshold: options.minConfidence,
     dryRun: options.dryRun,
@@ -119,11 +121,9 @@ export async function runReviewCommand(
     ...(dependencies.findingValidator === undefined
       ? {}
       : { findingValidator: dependencies.findingValidator }),
-    ...buildDefaultLlmReviewerInput({
-      createLlmProvider: dependencies.createLlmProvider,
-      env,
-      model: options.model,
-    }),
+    ...(llmReviewerSetup.llmReviewer === undefined
+      ? {}
+      : { llmReviewer: llmReviewerSetup.llmReviewer }),
   };
   const rawReviewResult = await pipeline(pipelineInput);
   const ref = {
@@ -159,11 +159,13 @@ export async function runReviewCommand(
             dryRun: options.dryRun,
             model: options.model,
             posted: finalized.posted,
+            warnings: llmReviewerSetup.warnings,
           })
-        : finalized.summary,
+        : appendWarningsToMarkdown(finalized.summary, llmReviewerSetup.warnings),
     posted: finalized.posted,
     reviewResult: finalized.result,
     summary: finalized.summary,
+    warnings: llmReviewerSetup.warnings,
   };
 }
 
@@ -219,36 +221,42 @@ function buildDefaultLlmReviewerInput(input: {
   createLlmProvider?: (config: { apiKey: string; model?: string }) => LlmProvider;
   env: Record<string, string | undefined>;
   model?: string;
-}): Pick<RunReviewPipelineInput, "llmReviewer"> {
+}): { llmReviewer?: LlmReviewer; warnings: string[] } {
   const apiKey = input.env.OPENAI_API_KEY;
   if (apiKey === undefined || apiKey.trim() === "") {
-    return {};
+    return {
+      warnings: [OPENAI_API_KEY_MISSING_WARNING],
+    };
   }
 
   const provider = (input.createLlmProvider ?? createOpenAIProvider)({
     apiKey,
     model: input.model,
   });
+  const passes = parseReviewPasses(input.env.DIFFGUARD_REVIEW_PASSES);
 
   return {
     llmReviewer: createReviewDiffLlmReviewer({
       model: input.model,
+      passes,
       provider,
     }),
+    warnings: [],
   };
 }
 
 function createReviewDiffLlmReviewer(input: {
   model?: string;
+  passes: ReviewPromptTemplateId[];
   provider: LlmProvider;
 }): LlmReviewer {
   return async (context) => {
     const findings: ReviewResult["findings"] = [];
     const modelCalls: NonNullable<ReviewResult["modelCalls"]> = [];
-    const diff = buildPullRequestDiff(context.files);
+    const diff = context.diff;
     const promptContext = buildPromptContext(context);
 
-    for (const templateId of REVIEW_TEMPLATE_IDS) {
+    for (const templateId of input.passes) {
       const result = await reviewDiffWithLlm({
         context: promptContext,
         diff,
@@ -284,24 +292,13 @@ function buildPromptContext(context: ReviewResult["context"]): string[] {
   ];
 }
 
-function buildPullRequestDiff(files: PullRequestFile[]): string {
-  if (files.length === 0) {
-    return "No changed files.";
-  }
-
-  return files.map(formatFileDiff).join("\n\n");
-}
-
-function formatFileDiff(file: PullRequestFile): string {
-  return [`File: ${file.filename}`, "Patch:", file.patch ?? "No patch available."].join("\n");
-}
-
 function buildJsonOutput(
   result: ReviewResult,
   options: {
     dryRun: boolean;
     model?: string;
     posted: boolean;
+    warnings: string[];
   },
 ): string {
   return JSON.stringify(
@@ -315,8 +312,17 @@ function buildJsonOutput(
       rejectedFindings: result.rejectedFindings,
       rules: result.context.rules,
       timings: result.timings,
+      warnings: options.warnings,
     },
     null,
     2,
   );
+}
+
+function appendWarningsToMarkdown(summary: string, warnings: string[]): string {
+  if (warnings.length === 0) {
+    return summary;
+  }
+
+  return `${summary}\n\n## Warnings\n${warnings.map((warning) => `- ${warning}`).join("\n")}`;
 }

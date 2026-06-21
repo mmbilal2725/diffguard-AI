@@ -1,13 +1,15 @@
 import { Worker } from "bullmq";
 import { createDatabaseClient } from "@diffguard/database";
-import { createOpenAIProvider, validateFindingResolutionWithLlm } from "@diffguard/llm";
+import { validateFindingResolutionWithLlm } from "@diffguard/llm";
 import {
   loadPostedFindingDedupeKeysFromDatabase,
+  markReviewRunFailedInDatabase,
   storeReviewRunInDatabase,
 } from "@diffguard/review-run";
 import { type ReviewJobData } from "@diffguard/shared";
 
 import { createWorkerConfig } from "./config.js";
+import { createWorkerLlmReviewer } from "./review-llm.js";
 import { createReviewProcessor } from "./review-processor.js";
 import { createPrismaResolutionStore } from "./resolution-store.js";
 
@@ -30,31 +32,37 @@ const reviewRunPersistence =
     : {
         loadPostedFindingDedupeKeys: (ref: { owner: string; repo: string; number: number }) =>
           loadPostedFindingDedupeKeysFromDatabase({ ref }),
+        markReviewRunFailed: (input: { reviewRunId: string }) =>
+          markReviewRunFailedInDatabase({ reviewRunId: input.reviewRunId }),
         storeReviewRun: storeReviewRunInDatabase,
       };
-const resolutionProvider =
-  config.openaiApiKey === undefined
-    ? undefined
-    : createOpenAIProvider({
-        apiKey: config.openaiApiKey,
-        model: config.openaiResolutionModel,
-      });
+const llmSetup = createWorkerLlmReviewer({
+  apiKey: config.openaiApiKey,
+  model: config.openaiResolutionModel,
+  reviewPasses: config.reviewPasses,
+});
+const llmProvider = llmSetup.provider;
+
+for (const warning of llmSetup.warnings) {
+  console.warn({ warning }, "DiffGuard LLM reviewer disabled");
+}
 
 const worker = new Worker<ReviewJobData>(
   config.queueName,
   createReviewProcessor({
     appId: config.githubAppId,
     privateKey: config.githubAppPrivateKey,
+    ...(llmSetup.llmReviewer === undefined ? {} : { llmReviewer: llmSetup.llmReviewer }),
     ...reviewRunPersistence,
     resolutionStore,
     resolutionValidator:
-      resolutionProvider === undefined
+      llmProvider === undefined
         ? undefined
         : (input) =>
             validateFindingResolutionWithLlm({
               ...input,
               model: config.openaiResolutionModel,
-              provider: resolutionProvider,
+              provider: llmProvider,
               providerName: "openai",
             }),
   }),
