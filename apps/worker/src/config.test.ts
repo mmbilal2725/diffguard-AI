@@ -13,6 +13,7 @@ describe("createWorkerConfig", () => {
   it("accepts explicit Redis and queue settings", () => {
     const config = createWorkerConfig({
       DIFFGUARD_REVIEW_PASSES: "logic-bugs,security-bugs",
+      DIFFGUARD_VALIDATOR_MODEL: "gpt-5.5-validator",
       OPENAI_API_KEY: "sk-test",
       OPENAI_RESOLUTION_MODEL: "gpt-5.5-mini",
       REDIS_URL: "redis://redis.example.test:6379",
@@ -21,6 +22,7 @@ describe("createWorkerConfig", () => {
 
     expect(config.openaiApiKey).toBe("sk-test");
     expect(config.openaiResolutionModel).toBe("gpt-5.5-mini");
+    expect(config.diffguardValidatorModel).toBe("gpt-5.5-validator");
     expect(config.reviewPasses).toBe("logic-bugs,security-bugs");
     expect(config.redisUrl).toBe("redis://redis.example.test:6379");
     expect(config.queueName).toBe("custom-review-queue");

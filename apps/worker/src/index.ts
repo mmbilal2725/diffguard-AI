@@ -40,6 +40,7 @@ const llmSetup = createWorkerLlmReviewer({
   apiKey: config.openaiApiKey,
   model: config.openaiResolutionModel,
   reviewPasses: config.reviewPasses,
+  validatorModel: config.diffguardValidatorModel ?? config.openaiResolutionModel,
 });
 const llmProvider = llmSetup.provider;
 
@@ -52,6 +53,9 @@ const worker = new Worker<ReviewJobData>(
   createReviewProcessor({
     appId: config.githubAppId,
     privateKey: config.githubAppPrivateKey,
+    ...(llmSetup.findingValidator === undefined
+      ? {}
+      : { findingValidator: llmSetup.findingValidator }),
     ...(llmSetup.llmReviewer === undefined ? {} : { llmReviewer: llmSetup.llmReviewer }),
     ...reviewRunPersistence,
     resolutionStore,

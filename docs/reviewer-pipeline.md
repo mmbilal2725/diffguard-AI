@@ -24,8 +24,9 @@ The pipeline flow is:
    subset, such as `security-bugs,regression-test-gaps`, to limit the passes.
 7. Validate reviewer output with Zod.
 8. Call the finding validator for every parsed candidate. The validator receives
-   the PR diff, relevant file patch context, `.diffguard-rules.md` content,
-   static check output, and the candidate finding details.
+   the PR diff, the exact changed file patch for the candidate path, relevant
+   file patch context, `.diffguard-rules.md` content, static check output, the
+   candidate finding details, and the original reviewer confidence.
 9. Reject candidates unless the validator returns `valid: true`,
    `shouldPost: true`, confidence above the configured threshold, and
    `falsePositiveRisk` other than `high`.
@@ -47,6 +48,23 @@ cannot be mapped inline, and stores review-run/finding records. The CLI and
 GitHub App worker both use this shared finalization package. If no validator is
 configured, the default validator rejects candidates so DiffGuard-AI prefers
 silence over posting unvalidated comments.
+
+Production validator calls are provided by `packages/llm` through the
+versioned `validator-v1` prompt and the `diffguard_finding_validation`
+structured-output schema. The validator model must return:
+
+- `valid`
+- `shouldPost`
+- `confidence`
+- `falsePositiveRisk`
+- `improvedComment`
+- `reason`
+
+CLI and worker mode configure the finding validator only when
+`DIFFGUARD_VALIDATOR_MODEL` or `OPENAI_RESOLUTION_MODEL` is set.
+`DIFFGUARD_VALIDATOR_MODEL` takes precedence. If neither validator model is
+configured, the production pipeline does not call a fallback review model for
+validation; it rejects every candidate safely.
 
 If `OPENAI_API_KEY` is missing, CLI and worker mode do not call the LLM provider.
 They return or log a clear warning that `OPENAI_API_KEY` is not configured and

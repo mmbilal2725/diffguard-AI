@@ -22,6 +22,7 @@ import {
   createOpenAIProvider,
   parseReviewPasses,
   reviewDiffWithLlm,
+  validateFindingWithLlm,
   type LlmProvider,
   type ReviewPromptTemplateId,
 } from "@diffguard/llm";
@@ -111,6 +112,7 @@ export async function runReviewCommand(
     env,
     model: options.model,
   });
+  const findingValidator = dependencies.findingValidator ?? llmReviewerSetup.findingValidator;
   const pipelineInput: RunReviewPipelineInput = {
     confidenceThreshold: options.minConfidence,
     dryRun: options.dryRun,
@@ -118,9 +120,9 @@ export async function runReviewCommand(
     owner: options.owner,
     pullNumber: options.pullNumber,
     repo: options.repo,
-    ...(dependencies.findingValidator === undefined
+    ...(findingValidator === undefined
       ? {}
-      : { findingValidator: dependencies.findingValidator }),
+      : { findingValidator }),
     ...(llmReviewerSetup.llmReviewer === undefined
       ? {}
       : { llmReviewer: llmReviewerSetup.llmReviewer }),
@@ -221,7 +223,7 @@ function buildDefaultLlmReviewerInput(input: {
   createLlmProvider?: (config: { apiKey: string; model?: string }) => LlmProvider;
   env: Record<string, string | undefined>;
   model?: string;
-}): { llmReviewer?: LlmReviewer; warnings: string[] } {
+}): { findingValidator?: FindingValidator; llmReviewer?: LlmReviewer; warnings: string[] } {
   const apiKey = input.env.OPENAI_API_KEY;
   if (apiKey === undefined || apiKey.trim() === "") {
     return {
@@ -234,14 +236,61 @@ function buildDefaultLlmReviewerInput(input: {
     model: input.model,
   });
   const passes = parseReviewPasses(input.env.DIFFGUARD_REVIEW_PASSES);
+  const validatorModel = resolveValidatorModel(input.env);
 
   return {
+    ...(validatorModel === undefined
+      ? {}
+      : {
+          findingValidator: createFindingLlmValidator({
+            model: validatorModel,
+            provider,
+          }),
+        }),
     llmReviewer: createReviewDiffLlmReviewer({
       model: input.model,
       passes,
       provider,
     }),
     warnings: [],
+  };
+}
+
+function resolveValidatorModel(env: Record<string, string | undefined>): string | undefined {
+  const validatorModel = env.DIFFGUARD_VALIDATOR_MODEL?.trim();
+  if (validatorModel !== undefined && validatorModel !== "") {
+    return validatorModel;
+  }
+
+  const resolutionModel = env.OPENAI_RESOLUTION_MODEL?.trim();
+  return resolutionModel === undefined || resolutionModel === "" ? undefined : resolutionModel;
+}
+
+function createFindingLlmValidator(input: {
+  model: string;
+  provider: LlmProvider;
+}): FindingValidator {
+  return async (validatorInput) => {
+    const result = await validateFindingWithLlm({
+      changedFilePatch: validatorInput.changedFilePatch,
+      diff: validatorInput.diff,
+      finding: validatorInput.finding,
+      model: input.model,
+      provider: input.provider,
+      providerName: "openai",
+      reviewerConfidence: validatorInput.reviewerConfidence,
+      rules: validatorInput.rules,
+      staticAnalysisContext: validatorInput.staticCheckResults,
+    });
+
+    return {
+      confidence: result.confidence,
+      falsePositiveRisk: result.falsePositiveRisk,
+      ...(result.improvedComment === undefined ? {} : { improvedComment: result.improvedComment }),
+      reason: result.reason,
+      shouldPost: result.shouldPost,
+      valid: result.valid,
+    };
   };
 }
 

@@ -181,10 +181,12 @@ export type LlmReviewerResult = {
 export type LlmReviewer = (context: ReviewContext) => Promise<unknown[] | LlmReviewerResult>;
 export type StaticCheckRunner = (context: ReviewContext) => Promise<unknown[]>;
 export type FindingValidatorInput = {
+  changedFilePatch: string | null;
   context: ReviewContext;
   diff: string;
   finding: ReviewerFindingCandidate;
   relevantCodeContext: string[];
+  reviewerConfidence: number;
   rules: string | null;
   staticCheckResults: unknown[];
 };
@@ -434,10 +436,12 @@ async function validateFindingsWithValidator(input: {
 
   for (const candidate of input.candidates) {
     const rawValidation = await input.findingValidator({
+      changedFilePatch: getChangedFilePatch(input.context, candidate),
       context: input.context,
       diff,
       finding: candidate,
       relevantCodeContext: buildRelevantCodeContext(input.context, candidate),
+      reviewerConfidence: candidate.confidence,
       rules: input.context.rules.content,
       staticCheckResults: input.staticCheckResults,
     });
@@ -647,6 +651,15 @@ function buildRelevantCodeContext(
   }
 
   return [formatFileDiff(file)];
+}
+
+function getChangedFilePatch(
+  context: ReviewContext,
+  finding: ReviewerFindingCandidate,
+): string | null {
+  const file = context.files.find((changedFile) => changedFile.filename === finding.filePath);
+
+  return file?.patch ?? null;
 }
 
 function formatFileDiff(file: PullRequestFile): string {

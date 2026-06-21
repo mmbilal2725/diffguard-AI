@@ -591,6 +591,68 @@ describe("review command", () => {
     expect(postedComments).toEqual([]);
   });
 
+  it("uses DIFFGUARD_VALIDATOR_MODEL for production validator calls", async () => {
+    const provider = createFakeLlmProvider([
+      {
+        findings: [
+          createFinding({
+            category: "authorization",
+            title: "Admin route returns data before auth",
+          }),
+        ],
+      },
+      {
+        confidence: 0.96,
+        falsePositiveRisk: "low",
+        improvedComment: "Call requireAdmin() before returning customer data to the caller.",
+        reason: "The changed file returns customer data before the required admin check.",
+        shouldPost: true,
+        valid: true,
+      },
+    ]);
+    const dependencies = createDependencies({
+      createLlmProvider: () => provider,
+      env: {
+        DIFFGUARD_REVIEW_PASSES: "security-bugs",
+        DIFFGUARD_VALIDATOR_MODEL: "gpt-test-validator",
+        GITHUB_TOKEN: "ghs_token",
+        OPENAI_API_KEY: "sk-test",
+      },
+      runReviewPipeline: undefined,
+      storeReviewRun: async () => undefined,
+    });
+
+    const result = await runReviewCommand(
+      {
+        dryRun: true,
+        minConfidence: 0.7,
+        model: "gpt-test-review",
+        output: "json",
+        owner: "acme",
+        pullNumber: 42,
+        repo: "widgets",
+      },
+      dependencies,
+    );
+
+    expect(provider.requests.map((request) => request.responseSchemaName)).toEqual([
+      "diffguard_review_findings",
+      "diffguard_finding_validation",
+    ]);
+    expect(provider.requests.map((request) => request.model)).toEqual([
+      "gpt-test-review",
+      "gpt-test-validator",
+    ]);
+    expect(provider.requests[1]?.messages[1]?.content).toContain("Reviewer confidence:\n0.94");
+    expect(provider.requests[1]?.messages[1]?.content).toContain("Changed file patch:");
+    expect(result.reviewResult.findings).toEqual([
+      expect.objectContaining({
+        improvedComment: "Call requireAdmin() before returning customer data to the caller.",
+        title: "Admin route returns data before auth",
+      }),
+    ]);
+  });
+
   it("rejects invalid mocked LLM responses before returning findings", async () => {
     const provider = createFakeLlmProvider([
       {
@@ -880,9 +942,7 @@ function createFinding(overrides: Partial<ReviewResult["findings"][number]> = {}
   };
 }
 
-type FakeLlmOutput = {
-  findings: unknown[];
-};
+type FakeLlmOutput = unknown;
 
 type CapturedLlmRequest = Parameters<LlmProvider["generateJson"]>[0];
 

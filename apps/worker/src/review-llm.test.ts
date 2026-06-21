@@ -46,6 +46,48 @@ describe("createWorkerLlmReviewer", () => {
     });
   });
 
+  it("creates a finding validator when a validator model is configured", async () => {
+    const provider = createFakeLlmProvider([
+      {
+        confidence: 0.97,
+        falsePositiveRisk: "low",
+        improvedComment: "Call requireAdmin() before returning customer data to the caller.",
+        reason: "The changed file returns customer data before the required admin check.",
+        shouldPost: true,
+        valid: true,
+      },
+    ]);
+    const setup = createWorkerLlmReviewer({
+      apiKey: "sk-test",
+      createProvider: () => provider,
+      validatorModel: "gpt-test-validator",
+    });
+
+    const result = await setup.findingValidator?.({
+      changedFilePatch: "@@ -10,6 +10,7 @@\n+return customer;",
+      context: createReviewContext(),
+      diff: "diff --git a/src/admin.ts b/src/admin.ts\n+return customer;",
+      finding: createFinding({
+        category: "authorization",
+        title: "Admin route returns data before auth",
+      }) as never,
+      relevantCodeContext: ["File: src/admin.ts\nPatch:\n+return customer;"],
+      reviewerConfidence: 0.92,
+      rules: "All admin routes must call requireAdmin().",
+      staticCheckResults: [{ ruleId: "admin-auth-order", result: "failed" }],
+    });
+
+    expect(result).toMatchObject({
+      confidence: 0.97,
+      falsePositiveRisk: "low",
+      shouldPost: true,
+      valid: true,
+    });
+    expect(provider.requests[0]?.model).toBe("gpt-test-validator");
+    expect(provider.requests[0]?.responseSchemaName).toBe("diffguard_finding_validation");
+    expect(provider.requests[0]?.messages[1]?.content).toContain("Reviewer confidence:\n0.92");
+  });
+
   it("rejects invalid mocked LLM responses before returning findings", async () => {
     const provider = createFakeLlmProvider([
       {
@@ -66,9 +108,7 @@ describe("createWorkerLlmReviewer", () => {
   });
 });
 
-type FakeLlmOutput = {
-  findings: unknown[];
-};
+type FakeLlmOutput = unknown;
 
 type CapturedLlmRequest = Parameters<LlmProvider["generateJson"]>[0];
 

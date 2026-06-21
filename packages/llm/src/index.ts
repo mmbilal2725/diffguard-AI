@@ -113,6 +113,53 @@ export const REVIEW_FINDING_JSON_SCHEMA = {
   type: "object",
 } as const;
 
+export const FINDING_VALIDATION_JSON_SCHEMA = {
+  additionalProperties: false,
+  properties: {
+    confidence: {
+      maximum: 1,
+      minimum: 0,
+      type: "number",
+    },
+    falsePositiveRisk: {
+      enum: ["low", "medium", "high"],
+      type: "string",
+    },
+    improvedComment: {
+      anyOf: [
+        {
+          maxLength: 4000,
+          minLength: 20,
+          type: "string",
+        },
+        {
+          type: "null",
+        },
+      ],
+    },
+    reason: {
+      maxLength: 2000,
+      minLength: 20,
+      type: "string",
+    },
+    shouldPost: {
+      type: "boolean",
+    },
+    valid: {
+      type: "boolean",
+    },
+  },
+  required: [
+    "valid",
+    "shouldPost",
+    "confidence",
+    "falsePositiveRisk",
+    "improvedComment",
+    "reason",
+  ],
+  type: "object",
+} as const;
+
 export const RESOLUTION_STATUS_JSON_SCHEMA = {
   additionalProperties: false,
   properties: {
@@ -142,6 +189,27 @@ const ResolutionValidatorOutputSchema = z
     status: z.enum(["resolved", "unresolved", "false_positive", "unknown"]),
   })
   .strict();
+
+const FindingValidatorOutputSchema = z
+  .object({
+    confidence: z.number().min(0).max(1),
+    falsePositiveRisk: z.enum(["low", "medium", "high"]),
+    improvedComment: z.string().min(20).max(4000).nullable().optional(),
+    reason: z.string().min(20).max(2000),
+    shouldPost: z.boolean(),
+    valid: z.boolean(),
+  })
+  .strict()
+  .transform((output) => ({
+    confidence: output.confidence,
+    falsePositiveRisk: output.falsePositiveRisk,
+    ...(output.improvedComment === null || output.improvedComment === undefined
+      ? {}
+      : { improvedComment: output.improvedComment }),
+    reason: output.reason,
+    shouldPost: output.shouldPost,
+    valid: output.valid,
+  }));
 
 export type ReviewPromptInput = {
   context?: string[];
@@ -250,8 +318,14 @@ export type TokenUsage = {
 export type LlmProviderRequest = {
   messages: LlmMessage[];
   model: string;
-  responseSchema: typeof REVIEW_FINDING_JSON_SCHEMA | typeof RESOLUTION_STATUS_JSON_SCHEMA;
-  responseSchemaName: "diffguard_review_findings" | "diffguard_resolution_status";
+  responseSchema:
+    | typeof FINDING_VALIDATION_JSON_SCHEMA
+    | typeof REVIEW_FINDING_JSON_SCHEMA
+    | typeof RESOLUTION_STATUS_JSON_SCHEMA;
+  responseSchemaName:
+    | "diffguard_finding_validation"
+    | "diffguard_review_findings"
+    | "diffguard_resolution_status";
   temperature?: number;
 };
 
@@ -341,7 +415,10 @@ type OpenAIChatCompletionRequest = {
   response_format: {
     json_schema: {
       name: string;
-      schema: typeof REVIEW_FINDING_JSON_SCHEMA | typeof RESOLUTION_STATUS_JSON_SCHEMA;
+      schema:
+        | typeof FINDING_VALIDATION_JSON_SCHEMA
+        | typeof REVIEW_FINDING_JSON_SCHEMA
+        | typeof RESOLUTION_STATUS_JSON_SCHEMA;
       strict: true;
     };
     type: "json_schema";
@@ -502,6 +579,95 @@ export type ResolutionFindingInput = {
   whyItMatters: string;
 };
 
+export type FindingValidationCandidateInput = {
+  category: string;
+  confidence: number;
+  evidence: string;
+  filePath: string;
+  improvedComment?: string;
+  line: number;
+  relatedRuleIds: string[];
+  severity: string;
+  side: "LEFT" | "RIGHT";
+  summary: string;
+  suggestedFix: string;
+  title: string;
+  whyItMatters: string;
+};
+
+export type ValidateFindingWithLlmInput = {
+  changedFilePatch: string | null;
+  diff: string;
+  finding: FindingValidationCandidateInput;
+  model?: string;
+  onModelCall?: (call: ModelCallLog) => void;
+  pricing?: TokenPricing;
+  provider: LlmProvider;
+  providerName?: string;
+  reviewerConfidence: number;
+  rules: string | null;
+  staticAnalysisContext: unknown[];
+};
+
+export type ValidateFindingWithLlmResult = z.infer<typeof FindingValidatorOutputSchema> & {
+  modelCalls: ModelCallLog[];
+  promptVersion: typeof VALIDATOR_PROMPT_VERSION;
+};
+
+export async function validateFindingWithLlm(
+  input: ValidateFindingWithLlmInput,
+): Promise<ValidateFindingWithLlmResult> {
+  const startedAtMs = Date.now();
+  const modelCalls: ModelCallLog[] = [];
+
+  let providerResponse: LlmProviderResponse;
+  try {
+    providerResponse = await input.provider.generateJson({
+      messages: buildFindingValidatorMessages(input),
+      model: input.model ?? DEFAULT_OPENAI_REVIEW_MODEL,
+      responseSchema: FINDING_VALIDATION_JSON_SCHEMA,
+      responseSchemaName: "diffguard_finding_validation",
+      temperature: 0,
+    });
+  } catch (error) {
+    const call = createModelCallLog({
+      attempt: 1,
+      input,
+      latencyMs: Date.now() - startedAtMs,
+      model: input.model ?? DEFAULT_OPENAI_REVIEW_MODEL,
+      promptVersion: VALIDATOR_PROMPT_VERSION,
+      status: "failed",
+      tokenUsage: emptyTokenUsage(),
+    });
+    modelCalls.push(call);
+    input.onModelCall?.(call);
+    throw error;
+  }
+
+  const parsed = FindingValidatorOutputSchema.safeParse(providerResponse.output);
+  const call = createModelCallLog({
+    attempt: 1,
+    input,
+    latencyMs: Date.now() - startedAtMs,
+    model: providerResponse.model,
+    promptVersion: VALIDATOR_PROMPT_VERSION,
+    status: parsed.success ? "succeeded" : "invalid_output",
+    tokenUsage: providerResponse.tokenUsage,
+  });
+  modelCalls.push(call);
+  input.onModelCall?.(call);
+
+  if (!parsed.success) {
+    throw new LlmValidationError(toValidationIssues(parsed.error), modelCalls);
+  }
+
+  return {
+    ...parsed.data,
+    modelCalls,
+    promptVersion: VALIDATOR_PROMPT_VERSION,
+  };
+}
+
 export type ValidateFindingResolutionWithLlmInput = {
   finding: ResolutionFindingInput;
   latestCodeContext: string[];
@@ -615,6 +781,49 @@ function buildReviewUserMessage(input: ReviewPromptInput): string {
     "",
     "Diff:",
     input.diff,
+  ].join("\n");
+}
+
+function buildFindingValidatorMessages(input: ValidateFindingWithLlmInput): LlmMessage[] {
+  return [
+    {
+      content: [
+        "Validate whether a candidate DiffGuard-AI review finding should be posted.",
+        "Return only structured JSON that matches the provided schema.",
+        "Approve only high-confidence, actionable engineering issues supported by the pull request diff.",
+        "Reject style-only, formatting-only, subjective, vague, speculative, non-actionable, or high false-positive-risk findings.",
+        "Use improvedComment to rewrite the comment only when it makes the finding more precise and actionable; otherwise return null.",
+      ].join("\n"),
+      role: "system",
+    },
+    {
+      content: buildFindingValidatorUserMessage(input),
+      role: "user",
+    },
+  ];
+}
+
+function buildFindingValidatorUserMessage(input: ValidateFindingWithLlmInput): string {
+  return [
+    "Repository rules:",
+    input.rules?.trim() ? input.rules : "No repository-specific rules were provided.",
+    "",
+    "Reviewer confidence:",
+    String(input.reviewerConfidence),
+    "",
+    "Candidate finding:",
+    JSON.stringify(input.finding, null, 2),
+    "",
+    "Static analysis context:",
+    input.staticAnalysisContext.length > 0
+      ? JSON.stringify(input.staticAnalysisContext, null, 2)
+      : "No static analysis context was available.",
+    "",
+    "Changed file patch:",
+    input.changedFilePatch?.trim() ? input.changedFilePatch : "No changed file patch was available.",
+    "",
+    "Pull request diff:",
+    input.diff.trim().length > 0 ? input.diff : "No pull request diff was available.",
   ].join("\n");
 }
 

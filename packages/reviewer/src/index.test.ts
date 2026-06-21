@@ -223,12 +223,14 @@ describe("review pipeline", () => {
     expect(result.findings[0]?.title).toBe("Admin route misses authorization");
     expect(validatorInputs).toHaveLength(1);
     expect(validatorInputs[0]?.diff).toContain(changedFile.patch);
+    expect(validatorInputs[0]?.changedFilePatch).toBe(changedFile.patch);
     expect(validatorInputs[0]?.relevantCodeContext).toEqual([
       "File: src/widgets.ts\nPatch:\n@@ -10,6 +10,7 @@\n+return total;",
     ]);
     expect(validatorInputs[0]?.rules).toBe("Only comment when confidence is high.");
     expect(validatorInputs[0]?.staticCheckResults).toEqual([]);
     expect(validatorInputs[0]?.finding.title).toBe("Admin route misses authorization");
+    expect(validatorInputs[0]?.reviewerConfidence).toBe(0.96);
   });
 
   it("rejects speculative findings when the validator says not to post", async () => {

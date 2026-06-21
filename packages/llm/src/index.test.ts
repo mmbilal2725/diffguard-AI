@@ -6,10 +6,13 @@ import {
   REVIEW_PROMPT_VERSION,
   REVIEW_PROMPT_TEMPLATES,
   RESOLUTION_VALIDATOR_PROMPT_VERSION,
+  VALIDATOR_PROMPT_VERSION,
   createReviewPromptInput,
   parseReviewPasses,
   reviewDiffWithLlm,
+  validateFindingWithLlm,
   validateFindingResolutionWithLlm,
+  type FindingValidationCandidateInput,
   type LlmProvider,
 } from "./index.js";
 
@@ -218,6 +221,84 @@ describe("validateFindingResolutionWithLlm", () => {
   });
 });
 
+describe("validateFindingWithLlm", () => {
+  it("uses a versioned validator prompt and validates finding decision output", async () => {
+    const provider = createFakeProvider([
+      {
+        output: {
+          confidence: 0.94,
+          falsePositiveRisk: "low",
+          improvedComment: "Call requireAdmin() before returning customer data to the caller.",
+          reason: "The changed file returns customer data before the required admin check.",
+          shouldPost: true,
+          valid: true,
+        },
+      },
+    ]);
+
+    const result = await validateFindingWithLlm({
+      changedFilePatch: "@@ -10,2 +10,3 @@\n+return customer;\n requireAdmin();",
+      diff: "diff --git a/src/admin.ts b/src/admin.ts\n+return customer;\n requireAdmin();",
+      finding: createFinding({
+        category: "authorization",
+        filePath: "src/admin.ts",
+        title: "Admin route returns data before auth",
+      }),
+      model: "gpt-test-validator",
+      provider,
+      providerName: "fake",
+      reviewerConfidence: 0.92,
+      rules: "All admin routes must call requireAdmin().",
+      staticAnalysisContext: [{ ruleId: "admin-auth-order", result: "failed" }],
+    });
+
+    expect(result).toMatchObject({
+      confidence: 0.94,
+      falsePositiveRisk: "low",
+      promptVersion: VALIDATOR_PROMPT_VERSION,
+      shouldPost: true,
+      valid: true,
+    });
+    expect(result.modelCalls[0]).toMatchObject({
+      model: "fake-review-model",
+      promptVersion: VALIDATOR_PROMPT_VERSION,
+      provider: "fake",
+      status: "succeeded",
+    });
+    expect(provider.requests[0]?.model).toBe("gpt-test-validator");
+    expect(provider.requests[0]?.responseSchemaName).toBe("diffguard_finding_validation");
+    expect(provider.requests[0]?.messages[0]?.content).toContain(
+      "Validate whether a candidate DiffGuard-AI review finding should be posted",
+    );
+    expect(provider.requests[0]?.messages[1]?.content).toContain("Reviewer confidence:\n0.92");
+    expect(provider.requests[0]?.messages[1]?.content).toContain("Changed file patch:");
+    expect(provider.requests[0]?.messages[1]?.content).toContain("Static analysis context:");
+  });
+
+  it("rejects invalid validator model output", async () => {
+    const provider = createFakeProvider([
+      {
+        output: {
+          valid: true,
+          shouldPost: true,
+        },
+      },
+    ]);
+
+    await expect(
+      validateFindingWithLlm({
+        changedFilePatch: "No patch available.",
+        diff: "diff --git a/src/file.ts b/src/file.ts",
+        finding: createFinding(),
+        provider,
+        reviewerConfidence: 0.92,
+        rules: null,
+        staticAnalysisContext: [],
+      }),
+    ).rejects.toBeInstanceOf(LlmValidationError);
+  });
+});
+
 type FakeProviderResponse = {
   output: unknown;
 };
@@ -251,7 +332,9 @@ function createFakeProvider(responses: FakeProviderResponse[]): LlmProvider & {
   };
 }
 
-function createFinding(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+function createFinding(
+  overrides: Partial<FindingValidationCandidateInput> = {},
+): FindingValidationCandidateInput {
   return {
     title: "Changed null check can throw",
     category: "logic",
