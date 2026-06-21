@@ -13,13 +13,14 @@ import {
   formatCurrency,
   formatDuration,
   formatPercent,
-  getDashboardMetrics,
+  getDashboardOverview,
   getReviewRuns
 } from "@/lib/dashboard-data";
 
-export default function DashboardPage(): React.ReactElement {
-  const metrics = getDashboardMetrics();
-  const recentRuns = getReviewRuns().slice(0, 4);
+export default async function DashboardPage(): Promise<React.ReactElement> {
+  const [overview, reviewRuns] = await Promise.all([getDashboardOverview(), getReviewRuns()]);
+  const metrics = overview.metrics;
+  const recentRuns = reviewRuns.slice(0, 4);
 
   return (
     <>
@@ -28,7 +29,7 @@ export default function DashboardPage(): React.ReactElement {
         description="Track whether DiffGuard-AI is catching high-confidence bugs, rejecting noisy findings, and staying within latency and cost targets."
         actions={
           <>
-            <Badge variant="outline">30-day mock snapshot</Badge>
+            <Badge variant="outline">Live API data</Badge>
             <Button asChild size="sm">
               <Link href="/dashboard/reviews">Open review runs</Link>
             </Button>
@@ -82,7 +83,7 @@ export default function DashboardPage(): React.ReactElement {
             <CardDescription>Posted findings compared with rejected candidate findings.</CardDescription>
           </CardHeader>
           <CardContent>
-            <ReviewTrendChart />
+            <ReviewTrendChart data={overview.reviewTrend} />
           </CardContent>
         </Card>
         <Card>
@@ -91,7 +92,7 @@ export default function DashboardPage(): React.ReactElement {
             <CardDescription>Daily spend and review turnaround time.</CardDescription>
           </CardHeader>
           <CardContent>
-            <CostLatencyChart />
+            <CostLatencyChart data={overview.reviewTrend} />
           </CardContent>
         </Card>
       </section>

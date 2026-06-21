@@ -11,7 +11,18 @@ Current routes:
 - `/dashboard/evals`: eval precision, recall, false positives, false negatives, and cost per run.
 - `/settings`: model, threshold, GitHub, and API key configuration placeholders.
 
-The dashboard uses mock data from `apps/web/src/lib/dashboard-data.ts` until API endpoints are ready. That module is the intended replacement boundary for future API-backed data loading, and it is covered by `apps/web/src/lib/dashboard-data.test.ts`.
+The dashboard loads data from `apps/api` through `apps/web/src/lib/dashboard-data.ts`. Set `DIFFGUARD_API_BASE_URL` for the web app when the API is not running at `http://localhost:3001`.
+
+Dashboard API endpoints:
+
+- `GET /dashboard/overview`: aggregate metrics plus review trend data.
+- `GET /dashboard/review-runs`: latest review runs.
+- `GET /dashboard/review-runs/:id`: review run detail with findings, validator decisions, and model-call telemetry.
+- `GET /dashboard/repositories`: connected repositories and dashboard settings.
+- `GET /dashboard/findings`: latest findings.
+- `GET /dashboard/evals`: eval summaries.
+
+Mock data is retained only for local demo mode. Set `DIFFGUARD_DEMO_MODE=true` when running `apps/web` if you want the dashboard to fall back to local sample data when the API is offline.
 
 The overview shows posted findings, resolved findings, unresolved findings, likely false positives, unknown classifications, and estimated resolution rate. Estimated resolution rate is calculated as `resolved findings / posted findings`. It is an approximation from latest PR evidence and a structured validator model, not perfect ground truth. Findings can be marked `unknown` when the latest diff/code no longer contains enough context to make a defensible classification.
 

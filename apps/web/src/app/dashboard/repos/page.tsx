@@ -6,9 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { formatPercent, repositories } from "@/lib/dashboard-data";
+import { formatPercent, getRepositories } from "@/lib/dashboard-data";
 
-export default function RepositoriesPage(): React.ReactElement {
+export default async function RepositoriesPage(): Promise<React.ReactElement> {
+  const repositories = await getRepositories();
+
   return (
     <>
       <PageHeader
@@ -25,7 +27,7 @@ export default function RepositoriesPage(): React.ReactElement {
       <Card>
         <CardHeader>
           <CardTitle>Repo settings</CardTitle>
-          <CardDescription>Mock settings that map to the future GitHub installation API.</CardDescription>
+          <CardDescription>Repository settings reported by the API.</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>

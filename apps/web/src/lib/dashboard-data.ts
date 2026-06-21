@@ -83,6 +83,20 @@ export interface DashboardMetrics {
   averageLatencySeconds: number;
 }
 
+export interface ReviewTrendPoint {
+  day: string;
+  prs: number;
+  findings: number;
+  rejected: number;
+  cost: number;
+  latency: number;
+}
+
+export interface DashboardOverview {
+  metrics: DashboardMetrics;
+  reviewTrend: ReviewTrendPoint[];
+}
+
 const overviewSnapshot = {
   totalPrsReviewed: 186,
   validatorAccepted: 341,
@@ -95,7 +109,7 @@ const overviewSnapshot = {
   latencySamplesSeconds: [42, 51, 47, 56, 44]
 };
 
-const reviewRuns: ReviewRun[] = [
+const demoReviewRuns: ReviewRun[] = [
   {
     id: "rvw_1042",
     createdAt: "2026-06-19T19:42:00.000Z",
@@ -344,7 +358,7 @@ const reviewRuns: ReviewRun[] = [
   }
 ];
 
-export const repositories: RepositorySettings[] = [
+const demoRepositories: RepositorySettings[] = [
   {
     id: "repo_001",
     repo: "acme/payments",
@@ -387,7 +401,7 @@ export const repositories: RepositorySettings[] = [
   }
 ];
 
-export const evalRuns: EvalRun[] = [
+const demoEvalRuns: EvalRun[] = [
   {
     id: "eval_20260619",
     name: "payments-security-v7",
@@ -423,7 +437,7 @@ export const evalRuns: EvalRun[] = [
   }
 ];
 
-export const reviewTrend = [
+const demoReviewTrend: ReviewTrendPoint[] = [
   { day: "Jun 15", prs: 28, findings: 51, rejected: 24, cost: 19.28, latency: 46 },
   { day: "Jun 16", prs: 31, findings: 58, rejected: 29, cost: 22.42, latency: 49 },
   { day: "Jun 17", prs: 27, findings: 44, rejected: 27, cost: 18.91, latency: 45 },
@@ -431,33 +445,83 @@ export const reviewTrend = [
   { day: "Jun 19", prs: 33, findings: 65, rejected: 31, cost: 23.87, latency: 48 }
 ];
 
-export function getDashboardMetrics(): DashboardMetrics {
+export async function getDashboardOverview(): Promise<DashboardOverview> {
+  return loadDashboardResource("/dashboard/overview", getDemoDashboardOverview);
+}
+
+export async function getDashboardMetrics(): Promise<DashboardMetrics> {
+  return (await getDashboardOverview()).metrics;
+}
+
+export async function getReviewTrend(): Promise<ReviewTrendPoint[]> {
+  return (await getDashboardOverview()).reviewTrend;
+}
+
+export async function getReviewRuns(): Promise<ReviewRun[]> {
+  return loadDashboardResource("/dashboard/review-runs", () => ({
+    reviewRuns: getDemoReviewRuns()
+  })).then((response) => response.reviewRuns);
+}
+
+export async function getReviewRunById(id: string): Promise<ReviewRun | undefined> {
+  try {
+    return await loadDashboardResource(
+      `/dashboard/review-runs/${encodeURIComponent(id)}`,
+      () => ({ reviewRun: demoReviewRuns.find((run) => run.id === id) })
+    ).then((response) => response.reviewRun);
+  } catch (error) {
+    if (error instanceof DashboardApiError && error.status === 404) {
+      return undefined;
+    }
+
+    throw error;
+  }
+}
+
+export async function getRepositories(): Promise<RepositorySettings[]> {
+  return loadDashboardResource("/dashboard/repositories", () => ({
+    repositories: demoRepositories
+  })).then((response) => response.repositories);
+}
+
+export async function getFindings(): Promise<Finding[]> {
+  return loadDashboardResource("/dashboard/findings", () => ({
+    findings: getDemoReviewRuns().flatMap((run) => run.findings)
+  })).then((response) => response.findings);
+}
+
+export async function getEvalRuns(): Promise<EvalRun[]> {
+  return loadDashboardResource("/dashboard/evals", () => ({ evals: demoEvalRuns })).then(
+    (response) => response.evals
+  );
+}
+
+function getDemoDashboardOverview(): DashboardOverview {
   const totalValidatorDecisions =
     overviewSnapshot.validatorAccepted + overviewSnapshot.validatorRejected;
   const latencyTotal = overviewSnapshot.latencySamplesSeconds.reduce((total, item) => total + item, 0);
 
   return {
-    totalPrsReviewed: overviewSnapshot.totalPrsReviewed,
-    findingsPosted: overviewSnapshot.validatorAccepted,
-    resolvedFindings: overviewSnapshot.resolvedFindings,
-    unresolvedFindings: overviewSnapshot.unresolvedFindings,
-    falsePositiveFindings: overviewSnapshot.falsePositiveFindings,
-    unknownFindings: overviewSnapshot.unknownFindings,
-    validatorRejectionRate: overviewSnapshot.validatorRejected / totalValidatorDecisions,
-    estimatedResolutionRate: overviewSnapshot.resolvedFindings / overviewSnapshot.validatorAccepted,
-    totalCostUsd: overviewSnapshot.totalCostUsd,
-    averageLatencySeconds: Math.round(latencyTotal / overviewSnapshot.latencySamplesSeconds.length)
+    metrics: {
+      totalPrsReviewed: overviewSnapshot.totalPrsReviewed,
+      findingsPosted: overviewSnapshot.validatorAccepted,
+      resolvedFindings: overviewSnapshot.resolvedFindings,
+      unresolvedFindings: overviewSnapshot.unresolvedFindings,
+      falsePositiveFindings: overviewSnapshot.falsePositiveFindings,
+      unknownFindings: overviewSnapshot.unknownFindings,
+      validatorRejectionRate: overviewSnapshot.validatorRejected / totalValidatorDecisions,
+      estimatedResolutionRate: overviewSnapshot.resolvedFindings / overviewSnapshot.validatorAccepted,
+      totalCostUsd: overviewSnapshot.totalCostUsd,
+      averageLatencySeconds: Math.round(latencyTotal / overviewSnapshot.latencySamplesSeconds.length)
+    },
+    reviewTrend: demoReviewTrend
   };
 }
 
-export function getReviewRuns(): ReviewRun[] {
-  return [...reviewRuns].sort(
+function getDemoReviewRuns(): ReviewRun[] {
+  return [...demoReviewRuns].sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   );
-}
-
-export function getReviewRunById(id: string): ReviewRun | undefined {
-  return reviewRuns.find((run) => run.id === id);
 }
 
 export function formatCurrency(value: number): string {
@@ -482,4 +546,52 @@ export function formatDuration(seconds: number): string {
 
 export function formatPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
+}
+
+class DashboardApiError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number
+  ) {
+    super(message);
+  }
+}
+
+async function loadDashboardResource<T>(
+  path: string,
+  getDemoValue: () => T
+): Promise<T> {
+  try {
+    const response = await fetch(`${getApiBaseUrl()}${path}`, { cache: "no-store" });
+
+    if (!response.ok) {
+      throw new DashboardApiError(`Failed to load ${path}: ${response.status}`, response.status);
+    }
+
+    return (await response.json()) as T;
+  } catch (error) {
+    if (isLocalDemoMode()) {
+      return getDemoValue();
+    }
+
+    if (error instanceof DashboardApiError) {
+      throw error;
+    }
+
+    throw new DashboardApiError(`Failed to load ${path}`, undefined);
+  }
+}
+
+function getApiBaseUrl(): string {
+  const value =
+    process.env.DIFFGUARD_API_BASE_URL ??
+    process.env.NEXT_PUBLIC_DIFFGUARD_API_BASE_URL ??
+    "http://localhost:3001";
+
+  return value.replace(/\/+$/, "");
+}
+
+function isLocalDemoMode(): boolean {
+  const value = process.env.DIFFGUARD_DEMO_MODE ?? process.env.NEXT_PUBLIC_DIFFGUARD_DEMO_MODE;
+  return value === "true" || value === "1";
 }

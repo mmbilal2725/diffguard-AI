@@ -1,12 +1,14 @@
 import { REVIEW_QUEUE_JOB_NAME, type ReviewJobData } from "@diffguard/shared";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 
+import { createPrismaDashboardStore, type DashboardStore } from "./dashboard-store.js";
 import { toReviewWebhookRequest, readWebhookAction } from "./github-webhook.js";
 import { createBullMqReviewQueue, type ReviewQueue } from "./review-queue.js";
 import { verifyGitHubWebhookSignature } from "./webhook-signature.js";
 import { createPrismaWebhookStore, type WebhookStore } from "./webhook-store.js";
 
 export type BuildApiServerOptions = {
+  dashboardStore?: DashboardStore;
   reviewQueue?: ReviewQueue;
   store?: WebhookStore;
   webhookSecret?: string;
@@ -17,6 +19,7 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
     logger: false
   });
   let defaultReviewQueue: ReviewQueue | undefined;
+  let defaultDashboardStore: DashboardStore | undefined;
   let defaultStore: WebhookStore | undefined;
 
   server.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
@@ -25,6 +28,48 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
 
   server.get("/health", async () => {
     return { status: "ok" };
+  });
+
+  server.get("/dashboard/overview", async () => {
+    const dashboardStore =
+      options.dashboardStore ?? (defaultDashboardStore ??= await createDefaultDashboardStore());
+    return dashboardStore.getOverview();
+  });
+
+  server.get("/dashboard/review-runs", async () => {
+    const dashboardStore =
+      options.dashboardStore ?? (defaultDashboardStore ??= await createDefaultDashboardStore());
+    return { reviewRuns: await dashboardStore.listReviewRuns() };
+  });
+
+  server.get<{ Params: { id: string } }>("/dashboard/review-runs/:id", async (request, reply) => {
+    const dashboardStore =
+      options.dashboardStore ?? (defaultDashboardStore ??= await createDefaultDashboardStore());
+    const reviewRun = await dashboardStore.getReviewRun(request.params.id);
+
+    if (reviewRun === null) {
+      return reply.code(404).send({ error: "Review run not found." });
+    }
+
+    return { reviewRun };
+  });
+
+  server.get("/dashboard/repositories", async () => {
+    const dashboardStore =
+      options.dashboardStore ?? (defaultDashboardStore ??= await createDefaultDashboardStore());
+    return { repositories: await dashboardStore.listRepositories() };
+  });
+
+  server.get("/dashboard/findings", async () => {
+    const dashboardStore =
+      options.dashboardStore ?? (defaultDashboardStore ??= await createDefaultDashboardStore());
+    return { findings: await dashboardStore.listFindings() };
+  });
+
+  server.get("/dashboard/evals", async () => {
+    const dashboardStore =
+      options.dashboardStore ?? (defaultDashboardStore ??= await createDefaultDashboardStore());
+    return { evals: await dashboardStore.listEvalSummaries() };
   });
 
   server.post("/webhooks/github", async (request, reply) => {
@@ -134,4 +179,9 @@ function parseJsonPayload(payload: string): { ok: true; data: unknown } | { ok: 
 async function createDefaultWebhookStore(): Promise<WebhookStore> {
   const { createDatabaseClient } = await import("@diffguard/database");
   return createPrismaWebhookStore(createDatabaseClient() as never);
+}
+
+async function createDefaultDashboardStore(): Promise<DashboardStore> {
+  const { createDatabaseClient } = await import("@diffguard/database");
+  return createPrismaDashboardStore(createDatabaseClient() as never);
 }

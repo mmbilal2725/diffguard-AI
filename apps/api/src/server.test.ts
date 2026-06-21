@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 
 import { describe, expect, it, vi } from "vitest";
 
+import type { DashboardStore } from "./dashboard-store.js";
 import { buildApiServer } from "./server.js";
 
 const WEBHOOK_SECRET = "test-webhook-secret";
@@ -17,6 +18,53 @@ describe("buildApiServer", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ status: "ok" });
+
+    await server.close();
+  });
+
+  it("serves dashboard API data from the configured dashboard store", async () => {
+    const dashboardStore = createDashboardStore();
+    const server = buildApiServer({ dashboardStore });
+
+    const overview = await server.inject({ method: "GET", url: "/dashboard/overview" });
+    const reviewRuns = await server.inject({ method: "GET", url: "/dashboard/review-runs" });
+    const reviewRun = await server.inject({
+      method: "GET",
+      url: "/dashboard/review-runs/rvw_live",
+    });
+    const repositories = await server.inject({ method: "GET", url: "/dashboard/repositories" });
+    const findings = await server.inject({ method: "GET", url: "/dashboard/findings" });
+    const evals = await server.inject({ method: "GET", url: "/dashboard/evals" });
+
+    expect(overview.statusCode).toBe(200);
+    expect(overview.json()).toEqual({
+      metrics: dashboardOverview.metrics,
+      reviewTrend: dashboardOverview.reviewTrend,
+    });
+    expect(reviewRuns.statusCode).toBe(200);
+    expect(reviewRuns.json()).toEqual({ reviewRuns: [dashboardReviewRun] });
+    expect(reviewRun.statusCode).toBe(200);
+    expect(reviewRun.json()).toEqual({ reviewRun: dashboardReviewRun });
+    expect(repositories.statusCode).toBe(200);
+    expect(repositories.json()).toEqual({ repositories: [dashboardRepository] });
+    expect(findings.statusCode).toBe(200);
+    expect(findings.json()).toEqual({ findings: dashboardReviewRun.findings });
+    expect(evals.statusCode).toBe(200);
+    expect(evals.json()).toEqual({ evals: [dashboardEval] });
+
+    await server.close();
+  });
+
+  it("returns not found for an unknown dashboard review run", async () => {
+    const server = buildApiServer({ dashboardStore: createDashboardStore() });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/dashboard/review-runs/missing",
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: "Review run not found." });
 
     await server.close();
   });
@@ -358,6 +406,112 @@ function createWebhookDependencies() {
       upsertPullRequest: vi.fn(async () => ({ pullRequestId: "pull_request_1" })),
       upsertRepositoryInstallation: vi.fn(async () => ({ repositoryId: "repository_1" })),
     },
+  };
+}
+
+const dashboardReviewRun = {
+  candidatesCount: 4,
+  confidenceThreshold: 0.82,
+  costUsd: 0.42,
+  createdAt: "2026-06-20T10:00:00.000Z",
+  findings: [
+    {
+      confidence: 0.91,
+      file: "apps/api/src/payments.ts",
+      id: "finding_live",
+      line: 37,
+      severity: "high" as const,
+      status: "posted" as const,
+      summary: "The changed handler skips the tenant ownership check.",
+      title: "Payment lookup bypasses tenant scope",
+    },
+  ],
+  findingsCount: 1,
+  githubCommentStatus: "posted" as const,
+  id: "rvw_live",
+  latencySeconds: 31,
+  modelCalls: [
+    {
+      costUsd: 0.18,
+      id: "call_live",
+      inputTokens: 1200,
+      latencyMs: 6400,
+      model: "gpt-4.1-mini",
+      outputTokens: 180,
+      purpose: "review:logic-bugs",
+    },
+  ],
+  prNumber: 12,
+  repo: "acme/payments",
+  status: "completed" as const,
+  title: "Fix payment lookup",
+  validatorDecisions: [
+    {
+      confidence: 0.91,
+      decision: "accepted" as const,
+      finding: "Payment lookup bypasses tenant scope",
+      id: "decision_live",
+      reason: "Finding is high confidence and maps to the changed code.",
+    },
+  ],
+};
+
+const dashboardRepository = {
+  confidenceThreshold: 0.82,
+  enabled: true,
+  id: "repo_live",
+  installation: "12345",
+  lastReviewedAt: "2026-06-20T10:00:00.000Z",
+  maxFindingsPerPr: 5,
+  repo: "acme/payments",
+  rulesPath: ".diffguard-rules.md",
+};
+
+const dashboardEval = {
+  cases: 32,
+  costUsd: 1.24,
+  createdAt: "2026-06-20T09:00:00.000Z",
+  falseNegatives: 3,
+  falsePositives: 1,
+  id: "eval_live",
+  name: "logic-bugs-v1",
+  precision: 0.94,
+  recall: 0.81,
+};
+
+const dashboardOverview = {
+  metrics: {
+    averageLatencySeconds: 31,
+    estimatedResolutionRate: 0.75,
+    falsePositiveFindings: 1,
+    findingsPosted: 8,
+    resolvedFindings: 6,
+    totalCostUsd: 3.5,
+    totalPrsReviewed: 12,
+    unknownFindings: 1,
+    unresolvedFindings: 1,
+    validatorRejectionRate: 0.2,
+  },
+  reviewTrend: [
+    {
+      cost: 0.42,
+      day: "Jun 20",
+      findings: 1,
+      latency: 31,
+      prs: 1,
+      rejected: 0,
+    },
+  ],
+};
+
+function createDashboardStore(): DashboardStore {
+  return {
+    getOverview: vi.fn(async () => dashboardOverview),
+    getReviewRun: vi.fn(async (id: string) => (id === dashboardReviewRun.id ? dashboardReviewRun : null)),
+    listEvalSummaries: vi.fn(async () => [dashboardEval]),
+    listFindings: vi.fn(async () => dashboardReviewRun.findings),
+    listRepositories: vi.fn(async () => [dashboardRepository]),
+    listReviewRuns: vi.fn(async () => [dashboardReviewRun]),
   };
 }
 

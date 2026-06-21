@@ -15,14 +15,14 @@ import {
   YAxis
 } from "recharts";
 
-import { reviewTrend, type EvalRun } from "@/lib/dashboard-data";
+import type { EvalRun, ReviewTrendPoint } from "@/lib/dashboard-data";
 
 const axisStyle = { fontSize: 12, fill: "hsl(var(--muted-foreground))" };
 
-export function ReviewTrendChart(): React.ReactElement {
+export function ReviewTrendChart({ data }: { data: ReviewTrendPoint[] }): React.ReactElement {
   return (
     <ResponsiveContainer width="100%" height={260}>
-      <AreaChart data={reviewTrend} margin={{ left: 4, right: 12, top: 12, bottom: 0 }}>
+      <AreaChart data={data} margin={{ left: 4, right: 12, top: 12, bottom: 0 }}>
         <defs>
           <linearGradient id="findingsGradient" x1="0" y1="0" x2="0" y2="1">
             <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.25} />
@@ -60,10 +60,10 @@ export function ReviewTrendChart(): React.ReactElement {
   );
 }
 
-export function CostLatencyChart(): React.ReactElement {
+export function CostLatencyChart({ data }: { data: ReviewTrendPoint[] }): React.ReactElement {
   return (
     <ResponsiveContainer width="100%" height={260}>
-      <BarChart data={reviewTrend} margin={{ left: 4, right: 12, top: 12, bottom: 0 }}>
+      <BarChart data={data} margin={{ left: 4, right: 12, top: 12, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
         <XAxis dataKey="day" tick={axisStyle} tickLine={false} axisLine={false} />
         <YAxis tick={axisStyle} tickLine={false} axisLine={false} />

@@ -60,9 +60,13 @@ Expected result:
 
 ## Show The Dashboard
 
-Start the dashboard:
+Start the API and dashboard. Use demo mode only when you want local sample data
+if the API is unavailable:
 
 ```powershell
+pnpm.cmd --filter @diffguard/api dev
+$env:DIFFGUARD_API_BASE_URL = "http://localhost:3001"
+$env:DIFFGUARD_DEMO_MODE = "true"
 pnpm.cmd --filter @diffguard/web dev
 ```
 

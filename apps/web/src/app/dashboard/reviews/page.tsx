@@ -7,8 +7,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCurrency, formatDuration, getReviewRuns } from "@/lib/dashboard-data";
 
-export default function ReviewsPage(): React.ReactElement {
-  const runs = getReviewRuns();
+export default async function ReviewsPage(): Promise<React.ReactElement> {
+  const runs = await getReviewRuns();
 
   return (
     <>
@@ -20,7 +20,7 @@ export default function ReviewsPage(): React.ReactElement {
       <Card>
         <CardHeader>
           <CardTitle>Worker queue history</CardTitle>
-          <CardDescription>Mock records shaped for the future API response.</CardDescription>
+          <CardDescription>Review runs persisted by the API and worker pipeline.</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>

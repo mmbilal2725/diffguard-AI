@@ -19,7 +19,7 @@ export default async function ReviewDetailsPage({
   params: Promise<{ id: string }>;
 }): Promise<React.ReactElement> {
   const { id } = await params;
-  const run = getReviewRunById(id);
+  const run = await getReviewRunById(id);
 
   if (!run) {
     notFound();
