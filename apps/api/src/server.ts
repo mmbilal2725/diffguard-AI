@@ -9,9 +9,16 @@ import { createBullMqReviewQueue, type ReviewQueue } from "./review-queue.js";
 import { verifyGitHubWebhookSignature } from "./webhook-signature.js";
 import { createPrismaWebhookStore, type WebhookStore } from "./webhook-store.js";
 
+export type RateLimitOptions = {
+  maxRequests: number;
+  windowMs: number;
+};
+
 export type BuildApiServerOptions = {
+  allowedOrigins?: string[];
   dashboardApiKey?: string;
   dashboardStore?: DashboardStore;
+  rateLimit?: RateLimitOptions;
   reviewQueue?: ReviewQueue;
   store?: WebhookStore;
   webhookSecret?: string;
@@ -24,9 +31,46 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
   let defaultReviewQueue: ReviewQueue | undefined;
   let defaultDashboardStore: DashboardStore | undefined;
   let defaultStore: WebhookStore | undefined;
+  const rateLimitState = new Map<string, { count: number; resetAt: number }>();
 
   server.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
     done(null, body);
+  });
+
+  server.addHook("onRequest", async (request, reply) => {
+    const rateLimit = readRateLimitOptions(options);
+    const rateLimitResult = checkRateLimit({
+      now: Date.now(),
+      rateLimit,
+      state: rateLimitState,
+      clientId: request.ip,
+    });
+
+    reply.header("x-ratelimit-limit", String(rateLimit.maxRequests));
+    reply.header("x-ratelimit-remaining", String(rateLimitResult.remaining));
+    reply.header("x-ratelimit-reset", String(Math.ceil(rateLimitResult.resetAt / 1000)));
+
+    if (!rateLimitResult.allowed) {
+      return reply
+        .code(429)
+        .header("retry-after", String(Math.ceil(rateLimitResult.retryAfterMs / 1000)))
+        .send({ error: "Rate limit exceeded." });
+    }
+  });
+
+  server.addHook("onRequest", async (request, reply) => {
+    const originResult = validateOrigin(request, readAllowedOrigins(options));
+    if (!originResult.allowed) {
+      return reply.code(403).send({ error: "Origin is not allowed." });
+    }
+
+    if (originResult.origin !== undefined) {
+      setCorsHeaders(reply, originResult.origin, request);
+    }
+
+    if (request.method === "OPTIONS") {
+      return reply.code(204).send();
+    }
   });
 
   server.get("/health", async () => {
@@ -199,6 +243,109 @@ function readRawPayload(request: FastifyRequest): string {
 function readHeader(request: FastifyRequest, name: string): string | undefined {
   const value = request.headers[name];
   return typeof value === "string" ? value : undefined;
+}
+
+function readAllowedOrigins(options: BuildApiServerOptions): string[] {
+  if (options.allowedOrigins !== undefined) {
+    return options.allowedOrigins;
+  }
+
+  return splitCsv(process.env.DIFFGUARD_ALLOWED_ORIGINS);
+}
+
+function readRateLimitOptions(options: BuildApiServerOptions): RateLimitOptions {
+  if (options.rateLimit !== undefined) {
+    return options.rateLimit;
+  }
+
+  return {
+    maxRequests: readPositiveInteger(process.env.DIFFGUARD_RATE_LIMIT_MAX_REQUESTS, 120),
+    windowMs: readPositiveInteger(process.env.DIFFGUARD_RATE_LIMIT_WINDOW_MS, 60_000),
+  };
+}
+
+function validateOrigin(
+  request: FastifyRequest,
+  allowedOrigins: string[]
+): { allowed: true; origin?: string } | { allowed: false } {
+  const origin = readHeader(request, "origin");
+  if (origin === undefined) {
+    return { allowed: true };
+  }
+
+  if (allowedOrigins.includes(origin)) {
+    return { allowed: true, origin };
+  }
+
+  return { allowed: false };
+}
+
+function setCorsHeaders(reply: FastifyReply, origin: string, request: FastifyRequest): void {
+  reply.header("access-control-allow-origin", origin);
+  reply.header("access-control-allow-methods", "GET,POST,OPTIONS");
+  reply.header(
+    "access-control-allow-headers",
+    readHeader(request, "access-control-request-headers") ??
+      "authorization,content-type,x-diffguard-api-key,x-github-delivery,x-github-event,x-hub-signature-256"
+  );
+  reply.header("access-control-max-age", "600");
+  reply.header("vary", "Origin");
+}
+
+function checkRateLimit(input: {
+  now: number;
+  rateLimit: RateLimitOptions;
+  state: Map<string, { count: number; resetAt: number }>;
+  clientId: string;
+}): { allowed: true; remaining: number; resetAt: number } | {
+  allowed: false;
+  remaining: number;
+  resetAt: number;
+  retryAfterMs: number;
+} {
+  const existing = input.state.get(input.clientId);
+  const current =
+    existing === undefined || existing.resetAt <= input.now
+      ? { count: 0, resetAt: input.now + input.rateLimit.windowMs }
+      : existing;
+
+  if (current.count >= input.rateLimit.maxRequests) {
+    return {
+      allowed: false,
+      remaining: 0,
+      resetAt: current.resetAt,
+      retryAfterMs: Math.max(current.resetAt - input.now, 0),
+    };
+  }
+
+  current.count += 1;
+  input.state.set(input.clientId, current);
+
+  return {
+    allowed: true,
+    remaining: Math.max(input.rateLimit.maxRequests - current.count, 0),
+    resetAt: current.resetAt,
+  };
+}
+
+function splitCsv(value: string | undefined): string[] {
+  if (value === undefined || value.trim() === "") {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item !== "");
+}
+
+function readPositiveInteger(value: string | undefined, fallback: number): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function readDashboardApiKey(options: BuildApiServerOptions): string | undefined {

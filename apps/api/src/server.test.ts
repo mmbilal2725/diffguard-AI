@@ -23,6 +23,92 @@ describe("buildApiServer", () => {
     await server.close();
   });
 
+  it("sets CORS headers for allowed origins", async () => {
+    const server = buildApiServer({ allowedOrigins: ["https://app.diffguard.ai"] });
+
+    const response = await server.inject({
+      headers: { origin: "https://app.diffguard.ai" },
+      method: "GET",
+      url: "/health"
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["access-control-allow-origin"]).toBe("https://app.diffguard.ai");
+    expect(response.headers.vary).toContain("Origin");
+
+    await server.close();
+  });
+
+  it("rejects browser requests from disallowed origins", async () => {
+    const server = buildApiServer({ allowedOrigins: ["https://app.diffguard.ai"] });
+
+    const response = await server.inject({
+      headers: { origin: "https://evil.example" },
+      method: "GET",
+      url: "/health"
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ error: "Origin is not allowed." });
+
+    await server.close();
+  });
+
+  it("handles CORS preflight for allowed origins", async () => {
+    const server = buildApiServer({ allowedOrigins: ["https://app.diffguard.ai"] });
+
+    const response = await server.inject({
+      headers: {
+        "access-control-request-headers": "authorization",
+        "access-control-request-method": "GET",
+        origin: "https://app.diffguard.ai",
+      },
+      method: "OPTIONS",
+      url: "/dashboard/overview"
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(response.headers["access-control-allow-origin"]).toBe("https://app.diffguard.ai");
+    expect(response.headers["access-control-allow-methods"]).toContain("GET");
+    expect(response.headers["access-control-allow-headers"]).toContain("authorization");
+
+    await server.close();
+  });
+
+  it("allows server-to-server requests without an origin header", async () => {
+    const server = buildApiServer({ allowedOrigins: ["https://app.diffguard.ai"] });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/health"
+    });
+
+    expect(response.statusCode).toBe(200);
+
+    await server.close();
+  });
+
+  it("rate limits repeated requests from the same client", async () => {
+    const server = buildApiServer({
+      rateLimit: {
+        maxRequests: 2,
+        windowMs: 60_000,
+      },
+    });
+
+    const first = await server.inject({ method: "GET", url: "/health" });
+    const second = await server.inject({ method: "GET", url: "/health" });
+    const third = await server.inject({ method: "GET", url: "/health" });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(third.statusCode).toBe(429);
+    expect(third.headers["retry-after"]).toBe("60");
+    expect(third.json()).toEqual({ error: "Rate limit exceeded." });
+
+    await server.close();
+  });
+
   it("serves dashboard API data from the configured dashboard store", async () => {
     const dashboardStore = createDashboardStore();
     const server = buildApiServer({ dashboardApiKey: DASHBOARD_API_KEY, dashboardStore });

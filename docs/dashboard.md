@@ -15,6 +15,8 @@ The dashboard loads data from `apps/api` through `apps/web/src/lib/dashboard-dat
 
 Dashboard API access is protected with `DIFFGUARD_DASHBOARD_API_KEY`. Configure the same value for `apps/api` and `apps/web`; the web app sends it server-side as `Authorization: Bearer ...` and never exposes it through `NEXT_PUBLIC_*`.
 
+`apps/api` also enforces browser origin checks and per-client rate limits. Set `DIFFGUARD_ALLOWED_ORIGINS` to a comma-separated list of dashboard origins that may call the API from a browser. Server-to-server requests without an `Origin` header are allowed. Rate limits default to `120` requests per `60000` ms and can be adjusted with `DIFFGUARD_RATE_LIMIT_MAX_REQUESTS` and `DIFFGUARD_RATE_LIMIT_WINDOW_MS`.
+
 Dashboard API endpoints:
 
 - `GET /dashboard/overview`: aggregate metrics plus review trend data.
@@ -30,6 +32,7 @@ Local API-backed dashboard example:
 
 ```powershell
 $env:DIFFGUARD_DASHBOARD_API_KEY = "replace-with-a-long-random-value"
+$env:DIFFGUARD_ALLOWED_ORIGINS = "http://localhost:3000"
 pnpm.cmd --filter @diffguard/api dev
 ```
 

@@ -65,6 +65,7 @@ if the API is unavailable:
 
 ```powershell
 $env:DIFFGUARD_DASHBOARD_API_KEY = "local-demo-dashboard-key"
+$env:DIFFGUARD_ALLOWED_ORIGINS = "http://localhost:3000"
 pnpm.cmd --filter @diffguard/api dev
 $env:DIFFGUARD_API_BASE_URL = "http://localhost:3001"
 $env:DIFFGUARD_DASHBOARD_API_KEY = "local-demo-dashboard-key"
