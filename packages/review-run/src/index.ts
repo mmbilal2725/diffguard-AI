@@ -123,6 +123,21 @@ export type PrismaClientLike = {
       skipDuplicates: boolean;
     }): Promise<unknown>;
   };
+  validatorDecision: {
+    createMany(input: {
+      data: Array<{
+        confidence?: number;
+        decision: string;
+        falsePositiveRisk?: string;
+        findingTitle: string;
+        reason: string;
+        reviewRunId: string;
+        shouldPost?: boolean;
+        valid?: boolean;
+      }>;
+      skipDuplicates: boolean;
+    }): Promise<unknown>;
+  };
   pullRequest: {
     upsert(input: {
       create: {
@@ -168,6 +183,7 @@ export type PrismaClientLike = {
     create(input: {
       data: {
         completedAt: Date;
+        errorMessage?: string | null;
         findingsDetected: number;
         findingsPosted: number;
         latencyMs: number;
@@ -181,6 +197,7 @@ export type PrismaClientLike = {
     update(input: {
       data: {
         completedAt?: Date;
+        errorMessage?: string | null;
         findingsDetected?: number;
         findingsPosted?: number;
         latencyMs?: number;
@@ -505,6 +522,14 @@ export async function storeReviewRunInDatabase(input: StoreReviewRunInput & {
         skipDuplicates: true,
       });
     }
+
+    const validatorDecisions = buildValidatorDecisionRows(input.result, reviewRun.id);
+    if (validatorDecisions.length > 0) {
+      await database.validatorDecision.createMany({
+        data: validatorDecisions,
+        skipDuplicates: true,
+      });
+    }
   } finally {
     await database.$disconnect();
   }
@@ -512,6 +537,7 @@ export async function storeReviewRunInDatabase(input: StoreReviewRunInput & {
 
 export async function markReviewRunFailedInDatabase(input: {
   database?: Pick<PrismaClientLike, "$disconnect" | "reviewRun">;
+  error?: unknown;
   reviewRunId: string;
 }): Promise<void> {
   const database = input.database ?? (await createDefaultDatabaseClient());
@@ -520,6 +546,7 @@ export async function markReviewRunFailedInDatabase(input: {
     await database.reviewRun.update({
       data: {
         completedAt: new Date(),
+        errorMessage: sanitizeErrorMessage(input.error),
         status: "FAILED",
       },
       where: {
@@ -529,6 +556,24 @@ export async function markReviewRunFailedInDatabase(input: {
   } finally {
     await database.$disconnect();
   }
+}
+
+export function sanitizeErrorMessage(error: unknown): string {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : "Review run failed.";
+
+  return message
+    .replace(
+      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+      "[redacted private key]",
+    )
+    .replace(/\b(?:sk|gh[pousr]|github_pat)[-_][A-Za-z0-9_-]{4,}\b/g, "[redacted]")
+    .replace(/\b(password|passwd|pwd|api[_-]?key|token|secret)\s*[:=]\s*["']?[^"',\s]+/gi, "$1=[redacted]")
+    .slice(0, 1000);
 }
 
 export async function loadPostedFindingDedupeKeysFromDatabase(input: {
@@ -756,6 +801,41 @@ function calculateValidatorRejectionRate(result: ReviewResult): number | undefin
 
 function calculateTotalModelCost(result: ReviewResult): number {
   return result.modelCalls.reduce((total, call) => total + call.costUsd, 0);
+}
+
+function buildValidatorDecisionRows(
+  result: ReviewResult,
+  reviewRunId: string,
+): Array<{
+  confidence?: number;
+  decision: string;
+  falsePositiveRisk?: string;
+  findingTitle: string;
+  reason: string;
+  reviewRunId: string;
+  shouldPost?: boolean;
+  valid?: boolean;
+}> {
+  return [
+    ...result.findings.map((finding) => ({
+      confidence: finding.confidence,
+      decision: "accepted",
+      findingTitle: finding.title,
+      reason: "Validated finding retained for posting.",
+      reviewRunId,
+      shouldPost: true,
+      valid: true,
+    })),
+    ...result.rejectedFindings.map((finding) => ({
+      decision: "rejected",
+      ...(finding.reason === "high_false_positive_risk" ? { falsePositiveRisk: "high" } : {}),
+      findingTitle: finding.title ?? "Rejected candidate",
+      reason: finding.reason,
+      reviewRunId,
+      shouldPost: false,
+      valid: false,
+    })),
+  ];
 }
 
 function toPrismaModelCallStatus(status: string): string {

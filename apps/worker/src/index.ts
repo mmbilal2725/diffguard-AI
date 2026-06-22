@@ -32,8 +32,8 @@ const reviewRunPersistence =
     : {
         loadPostedFindingDedupeKeys: (ref: { owner: string; repo: string; number: number }) =>
           loadPostedFindingDedupeKeysFromDatabase({ ref }),
-        markReviewRunFailed: (input: { reviewRunId: string }) =>
-          markReviewRunFailedInDatabase({ reviewRunId: input.reviewRunId }),
+        markReviewRunFailed: (input: { error: unknown; reviewRunId: string }) =>
+          markReviewRunFailedInDatabase({ error: input.error, reviewRunId: input.reviewRunId }),
         storeReviewRun: storeReviewRunInDatabase,
       };
 const llmSetup = createWorkerLlmReviewer({

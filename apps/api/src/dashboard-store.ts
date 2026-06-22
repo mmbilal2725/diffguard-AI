@@ -1,4 +1,10 @@
-export type ReviewRunStatus = "queued" | "analyzing" | "validating" | "completed" | "failed";
+export type ReviewRunStatus =
+  | "queued"
+  | "analyzing"
+  | "validating"
+  | "completed"
+  | "failed"
+  | "skipped";
 
 export type ValidatorDecision = "accepted" | "rejected" | "deduplicated";
 
@@ -154,6 +160,14 @@ type ModelCallRecord = {
   latencyMs: number;
 };
 
+type ValidatorDecisionRecord = {
+  id: string;
+  confidence: DecimalLike;
+  decision: string;
+  findingTitle: string;
+  reason: string;
+};
+
 type ReviewRunRecord = {
   id: string;
   status: string;
@@ -168,6 +182,7 @@ type ReviewRunRecord = {
   pullRequest: PullRequestRecord;
   findings: FindingRecord[];
   modelCalls: ModelCallRecord[];
+  validatorDecisions?: ValidatorDecisionRecord[];
 };
 
 type EvalRunRecord = {
@@ -270,6 +285,7 @@ const reviewRunInclude = {
       repository: true,
     },
   },
+  validatorDecisions: { orderBy: { createdAt: "asc" } },
 };
 
 function toOverview(reviewRuns: ReviewRunRecord[]): DashboardOverview {
@@ -363,13 +379,7 @@ function toDashboardReviewRun(reviewRun: ReviewRunRecord): DashboardReviewRun {
     repo: `${reviewRun.pullRequest.repository.owner}/${reviewRun.pullRequest.repository.name}`,
     status: toReviewRunStatus(reviewRun.status),
     title: reviewRun.pullRequest.title,
-    validatorDecisions: reviewRun.findings.map((finding) => ({
-      confidence: toNumber(finding.confidence),
-      decision: "accepted",
-      finding: finding.title,
-      id: `${finding.id}:accepted`,
-      reason: "Validated finding retained for dashboard reporting.",
-    })),
+    validatorDecisions: toDashboardValidatorDecisions(reviewRun),
   };
 }
 
@@ -396,6 +406,40 @@ function toDashboardModelCall(modelCall: ModelCallRecord): DashboardReviewRun["m
     outputTokens: modelCall.outputTokens,
     purpose: `${modelCall.provider}:${modelCall.promptVersion}`,
   };
+}
+
+function toDashboardValidatorDecisions(
+  reviewRun: ReviewRunRecord,
+): DashboardReviewRun["validatorDecisions"] {
+  if ((reviewRun.validatorDecisions?.length ?? 0) > 0) {
+    return (reviewRun.validatorDecisions ?? []).map((decision) => ({
+      confidence: toNumber(decision.confidence),
+      decision: toValidatorDecision(decision.decision),
+      finding: decision.findingTitle,
+      id: decision.id,
+      reason: decision.reason,
+    }));
+  }
+
+  return reviewRun.findings.map((finding) => ({
+    confidence: toNumber(finding.confidence),
+    decision: "accepted",
+    finding: finding.title,
+    id: `${finding.id}:accepted`,
+    reason: "Validated finding retained for dashboard reporting.",
+  }));
+}
+
+function toValidatorDecision(decision: string): ValidatorDecision {
+  switch (decision) {
+    case "rejected":
+      return "rejected";
+    case "deduplicated":
+      return "deduplicated";
+    case "accepted":
+    default:
+      return "accepted";
+  }
 }
 
 function toDashboardRepository(repository: RepositoryRecord): DashboardRepository {
@@ -440,6 +484,8 @@ function toReviewRunStatus(status: string): ReviewRunStatus {
       return "analyzing";
     case "COMPLETED":
       return "completed";
+    case "SKIPPED":
+      return "skipped";
     case "FAILED":
     case "CANCELED":
     default:
@@ -477,6 +523,10 @@ function toFindingStatus(status: string): GitHubCommentStatus {
 function toGitHubCommentStatus(reviewRun: ReviewRunRecord): GitHubCommentStatus {
   if (reviewRun.status === "FAILED" || reviewRun.status === "CANCELED") {
     return "failed";
+  }
+
+  if (reviewRun.status === "SKIPPED") {
+    return "skipped";
   }
 
   if (reviewRun.findingsPosted > 0) {

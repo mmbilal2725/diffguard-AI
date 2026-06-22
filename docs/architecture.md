@@ -53,6 +53,21 @@ Runtime flow:
     a summary issue comment fallback.
 13. Metrics, GitHub comment IDs, and feedback events are stored for quality tracking.
 
+## Database Persistence
+
+`packages/database/prisma/schema.prisma` is the source of truth for production
+persistence. It stores repositories, pull requests, review runs, findings,
+validator decisions, model calls, webhook deliveries, eval summaries, and
+feedback events. Review runs support queued, running, completed, failed, skipped,
+and legacy canceled states.
+
+Review run records include cost, latency, token usage through related model-call
+rows, model name, prompt version, validator rejection rate, and persisted
+validator decisions. Worker failure paths store a bounded, redacted error message
+for debugging without retaining raw tokens, API keys, private keys, or passwords.
+Dashboard-oriented indexes cover common status, time, pull request, model, and
+validator-decision queries.
+
 ## Resolution Tracking
 
 DiffGuard-AI stores posted findings with their GitHub comment IDs. On later PR updates

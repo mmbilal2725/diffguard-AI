@@ -19,6 +19,7 @@ enum ReviewRunStatus {
   COMPLETED
   FAILED
   CANCELED
+  SKIPPED
 }
 
 enum FindingSeverity {
@@ -103,28 +104,31 @@ model PullRequest {
 }
 
 model ReviewRun {
-  id                      String          @id @default(cuid())
+  id                      String              @id @default(cuid())
   pullRequestId           String
-  status                  ReviewRunStatus @default(QUEUED)
+  status                  ReviewRunStatus     @default(QUEUED)
   trigger                 String?
   githubDeliveryId        String?
+  errorMessage            String?
   startedAt               DateTime?
   completedAt             DateTime?
-  findingsDetected        Int             @default(0)
-  findingsPosted          Int             @default(0)
-  validatorRejectionRate  Decimal?        @db.Decimal(5, 4)
-  estimatedFalsePositives Int             @default(0)
-  resolvedFindings        Int             @default(0)
-  totalCostUsd            Decimal         @default(0) @db.Decimal(12, 6)
+  findingsDetected        Int                 @default(0)
+  findingsPosted          Int                 @default(0)
+  validatorRejectionRate  Decimal?            @db.Decimal(5, 4)
+  estimatedFalsePositives Int                 @default(0)
+  resolvedFindings        Int                 @default(0)
+  totalCostUsd            Decimal             @default(0) @db.Decimal(12, 6)
   latencyMs               Int?
-  createdAt               DateTime        @default(now())
-  updatedAt               DateTime        @updatedAt
-  pullRequest             PullRequest     @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+  pullRequest             PullRequest         @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
   findings                Finding[]
+  validatorDecisions      ValidatorDecision[]
   modelCalls              ModelCall[]
   feedbackEvents          FeedbackEvent[]
 
   @@index([pullRequestId, status])
+  @@index([status, createdAt])
   @@index([githubDeliveryId])
   @@index([createdAt])
 }
@@ -164,31 +168,53 @@ model EvalRun {
 }
 
 model Finding {
-  id              String          @id @default(cuid())
-  reviewRunId     String
-  dedupeKey       String
-  title           String
-  summary         String
-  evidence        String
-  category        FindingCategory
-  severity        FindingSeverity
-  confidence      Decimal         @db.Decimal(3, 2)
-  filePath        String
-  line            Int
-  side            FindingSide     @default(RIGHT)
-  suggestedFix    String?
-  whyItMatters    String
-  relatedRuleIds  String[]        @default([])
-  status          FindingStatus   @default(VALIDATED)
-  githubCommentId String?
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
-  reviewRun       ReviewRun       @relation(fields: [reviewRunId], references: [id], onDelete: Cascade)
-  feedbackEvents  FeedbackEvent[]
+  id                 String              @id @default(cuid())
+  reviewRunId        String
+  dedupeKey          String
+  title              String
+  summary            String
+  evidence           String
+  category           FindingCategory
+  severity           FindingSeverity
+  confidence         Decimal             @db.Decimal(3, 2)
+  filePath           String
+  line               Int
+  side               FindingSide         @default(RIGHT)
+  suggestedFix       String?
+  whyItMatters       String
+  relatedRuleIds     String[]            @default([])
+  status             FindingStatus       @default(VALIDATED)
+  githubCommentId    String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  reviewRun          ReviewRun           @relation(fields: [reviewRunId], references: [id], onDelete: Cascade)
+  feedbackEvents     FeedbackEvent[]
+  validatorDecisions ValidatorDecision[]
 
   @@unique([reviewRunId, dedupeKey])
   @@index([reviewRunId, status])
+  @@index([status, createdAt])
   @@index([filePath])
+}
+
+model ValidatorDecision {
+  id                String    @id @default(cuid())
+  reviewRunId       String
+  findingId         String?
+  findingTitle      String
+  decision          String
+  valid             Boolean?
+  shouldPost        Boolean?
+  confidence        Decimal?  @db.Decimal(5, 4)
+  falsePositiveRisk String?
+  reason            String
+  createdAt         DateTime  @default(now())
+  reviewRun         ReviewRun @relation(fields: [reviewRunId], references: [id], onDelete: Cascade)
+  finding           Finding?  @relation(fields: [findingId], references: [id], onDelete: SetNull)
+
+  @@index([reviewRunId, decision])
+  @@index([findingId])
+  @@index([createdAt])
 }
 
 model ModelCall {
@@ -208,6 +234,7 @@ model ModelCall {
   reviewRun     ReviewRun       @relation(fields: [reviewRunId], references: [id], onDelete: Cascade)
 
   @@index([reviewRunId])
+  @@index([reviewRunId, createdAt])
   @@index([modelName, promptVersion])
 }
 

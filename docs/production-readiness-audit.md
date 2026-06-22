@@ -10,6 +10,12 @@ The repository is in good shape for TypeScript, lint, tests, workspace linking, 
 
 No application code fixes were made during this audit. This file is the only intended audit artifact.
 
+## Migration Follow-Up Update
+
+Date: 2026-06-21
+
+The migration baseline gap called out below has been addressed by adding an initial review-persistence migration, the existing eval summary migration, and a follow-up review-run production persistence migration. Re-run the verification checklist against a disposable Postgres database before treating a deployment environment as migrated.
+
 ## Fix Pass Update
 
 Date: 2026-06-21

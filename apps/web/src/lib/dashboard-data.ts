@@ -1,4 +1,10 @@
-export type ReviewRunStatus = "queued" | "analyzing" | "validating" | "completed" | "failed";
+export type ReviewRunStatus =
+  | "queued"
+  | "analyzing"
+  | "validating"
+  | "completed"
+  | "failed"
+  | "skipped";
 
 export type ValidatorDecision = "accepted" | "rejected" | "deduplicated";
 

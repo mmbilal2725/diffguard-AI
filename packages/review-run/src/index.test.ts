@@ -171,7 +171,13 @@ describe("review-run finalization", () => {
       result: createReviewResult({ findings: [createFinding()] }),
     });
 
-    expect(calls).toEqual(["repository.upsert", "pullRequest.upsert", "reviewRun.create", "finding.createMany"]);
+    expect(calls).toEqual([
+      "repository.upsert",
+      "pullRequest.upsert",
+      "reviewRun.create",
+      "finding.createMany",
+      "validatorDecision.createMany",
+    ]);
     expect(prisma.findingCreateManyInput?.data[0]).toMatchObject({
       dedupeKey: "src/admin.ts:12:authorization:admin route misses authorization",
       githubCommentId: "901",
@@ -237,6 +243,7 @@ describe("review-run finalization", () => {
       "reviewRun.update",
       "finding.createMany",
       "modelCall.createMany",
+      "validatorDecision.createMany",
     ]);
     expect(prisma.reviewRunUpdateInput).toMatchObject({
       data: {
@@ -271,21 +278,41 @@ describe("review-run finalization", () => {
         status: "FAILED",
       }),
     ]);
+    expect(prisma.validatorDecisionCreateManyInput?.data).toEqual([
+      expect.objectContaining({
+        confidence: 0.94,
+        decision: "accepted",
+        findingTitle: "Admin route misses authorization",
+        reason: "Validated finding retained for posting.",
+        reviewRunId: "review_run_existing",
+        valid: true,
+      }),
+      expect.objectContaining({
+        decision: "rejected",
+        findingTitle: "Speculative issue",
+        reason: "low_confidence",
+        reviewRunId: "review_run_existing",
+        shouldPost: false,
+        valid: false,
+      }),
+    ]);
     expect(prisma.disconnected).toBe(true);
   });
 
-  it("marks existing review runs failed in Prisma", async () => {
+  it("marks existing review runs failed in Prisma with a sanitized error message", async () => {
     const calls: string[] = [];
     const prisma = createPrismaDouble(calls);
 
     await markReviewRunFailedInDatabase({
       database: prisma,
+      error: new Error("OpenAI key sk-live-secret leaked in stack trace"),
       reviewRunId: "review_run_existing",
     });
 
     expect(calls).toEqual(["reviewRun.update"]);
     expect(prisma.reviewRunUpdateInput).toMatchObject({
       data: {
+        errorMessage: "OpenAI key [redacted] leaked in stack trace",
         status: "FAILED",
       },
       where: { id: "review_run_existing" },
@@ -485,6 +512,10 @@ function createPrismaDouble(calls: string[]): PrismaClientLike & {
   findingFindManyResult: Array<{ dedupeKey: string }>;
   modelCallCreateManyInput?: Parameters<PrismaClientLike["modelCall"]["createMany"]>[0];
   reviewRunUpdateInput?: Parameters<PrismaClientLike["reviewRun"]["update"]>[0];
+  validatorDecisionCreateManyInput?: {
+    data: unknown[];
+    skipDuplicates: boolean;
+  };
 } {
   const prisma: PrismaClientLike & {
     disconnected: boolean;
@@ -493,6 +524,10 @@ function createPrismaDouble(calls: string[]): PrismaClientLike & {
     findingFindManyResult: Array<{ dedupeKey: string }>;
     modelCallCreateManyInput?: Parameters<PrismaClientLike["modelCall"]["createMany"]>[0];
     reviewRunUpdateInput?: Parameters<PrismaClientLike["reviewRun"]["update"]>[0];
+    validatorDecisionCreateManyInput?: {
+      data: unknown[];
+      skipDuplicates: boolean;
+    };
   } = {
     disconnected: false,
     findingCreateManyInput: undefined,
@@ -500,6 +535,7 @@ function createPrismaDouble(calls: string[]): PrismaClientLike & {
     findingFindManyResult: [],
     modelCallCreateManyInput: undefined,
     reviewRunUpdateInput: undefined,
+    validatorDecisionCreateManyInput: undefined,
     async $disconnect() {
       prisma.disconnected = true;
     },
@@ -540,6 +576,12 @@ function createPrismaDouble(calls: string[]): PrismaClientLike & {
         calls.push("reviewRun.update");
         prisma.reviewRunUpdateInput = input;
         return { id: input.where.id };
+      },
+    },
+    validatorDecision: {
+      createMany: async (input: { data: unknown[]; skipDuplicates: boolean }) => {
+        calls.push("validatorDecision.createMany");
+        prisma.validatorDecisionCreateManyInput = input;
       },
     },
   };
