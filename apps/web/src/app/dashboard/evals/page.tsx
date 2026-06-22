@@ -1,6 +1,7 @@
 import { EvalQualityChart } from "@/components/dashboard/charts";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { PageHeader } from "@/components/dashboard/page-header";
+import { StatePanel } from "@/components/dashboard/state-panel";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCurrency, formatPercent, getEvalRuns } from "@/lib/dashboard-data";
@@ -57,9 +58,10 @@ export default async function EvalsPage(): Promise<React.ReactElement> {
           </CardHeader>
           <CardContent>
             {evalRuns.length === 0 ? (
-              <div className="rounded-md border bg-muted/40 p-6 text-sm text-muted-foreground">
-                No eval summaries have been stored yet.
-              </div>
+              <StatePanel
+                title="No eval summaries stored"
+                description="Persisted eval runs will populate precision, recall, false-positive, and false-negative trends here."
+              />
             ) : (
               <EvalQualityChart evals={evalRuns} />
             )}
@@ -73,9 +75,10 @@ export default async function EvalsPage(): Promise<React.ReactElement> {
           </CardHeader>
           <CardContent>
             {evalRuns.length === 0 ? (
-              <div className="rounded-md border bg-muted/40 p-6 text-sm text-muted-foreground">
-                Run `diffguard-ai eval run` and persist summaries to populate this view.
-              </div>
+              <StatePanel
+                title="No eval run history"
+                description="Run diffguard-ai eval run with DATABASE_URL configured to populate this view."
+              />
             ) : (
               <Table>
                 <TableHeader>

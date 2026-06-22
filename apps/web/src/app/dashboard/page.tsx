@@ -5,6 +5,7 @@ import { CostLatencyChart, ReviewTrendChart } from "@/components/dashboard/chart
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { StatusBadge } from "@/components/dashboard/status-badge";
+import { StatePanel } from "@/components/dashboard/state-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -83,7 +84,14 @@ export default async function DashboardPage(): Promise<React.ReactElement> {
             <CardDescription>Posted findings compared with rejected candidate findings.</CardDescription>
           </CardHeader>
           <CardContent>
-            <ReviewTrendChart data={overview.reviewTrend} />
+            {overview.reviewTrend.length === 0 ? (
+              <StatePanel
+                title="No review trend data"
+                description="Review runs will appear here after the worker completes API-backed pull request reviews."
+              />
+            ) : (
+              <ReviewTrendChart data={overview.reviewTrend} />
+            )}
           </CardContent>
         </Card>
         <Card>
@@ -92,7 +100,14 @@ export default async function DashboardPage(): Promise<React.ReactElement> {
             <CardDescription>Daily spend and review turnaround time.</CardDescription>
           </CardHeader>
           <CardContent>
-            <CostLatencyChart data={overview.reviewTrend} />
+            {overview.reviewTrend.length === 0 ? (
+              <StatePanel
+                title="No cost or latency samples"
+                description="Model-call spend and review latency charts populate after persisted review runs are available."
+              />
+            ) : (
+              <CostLatencyChart data={overview.reviewTrend} />
+            )}
           </CardContent>
         </Card>
       </section>
@@ -108,36 +123,43 @@ export default async function DashboardPage(): Promise<React.ReactElement> {
           </Button>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Repository</TableHead>
-                <TableHead>PR</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Findings</TableHead>
-                <TableHead>Cost</TableHead>
-                <TableHead>Latency</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {recentRuns.map((run) => (
-                <TableRow key={run.id}>
-                  <TableCell>
-                    <Link href={`/dashboard/reviews/${run.id}`} className="font-medium hover:underline">
-                      {run.repo}
-                    </Link>
-                  </TableCell>
-                  <TableCell>#{run.prNumber}</TableCell>
-                  <TableCell>
-                    <StatusBadge status={run.status} />
-                  </TableCell>
-                  <TableCell>{run.findingsCount}</TableCell>
-                  <TableCell>{formatCurrency(run.costUsd)}</TableCell>
-                  <TableCell>{formatDuration(run.latencySeconds)}</TableCell>
+          {recentRuns.length === 0 ? (
+            <StatePanel
+              title="No review runs yet"
+              description="Install the GitHub App or run the action on a pull request to populate production monitoring data."
+            />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Repository</TableHead>
+                  <TableHead>PR</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Findings</TableHead>
+                  <TableHead>Cost</TableHead>
+                  <TableHead>Latency</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {recentRuns.map((run) => (
+                  <TableRow key={run.id}>
+                    <TableCell>
+                      <Link href={`/dashboard/reviews/${run.id}`} className="font-medium hover:underline">
+                        {run.repo}
+                      </Link>
+                    </TableCell>
+                    <TableCell>#{run.prNumber}</TableCell>
+                    <TableCell>
+                      <StatusBadge status={run.status} />
+                    </TableCell>
+                    <TableCell>{run.findingsCount}</TableCell>
+                    <TableCell>{formatCurrency(run.costUsd)}</TableCell>
+                    <TableCell>{formatDuration(run.latencySeconds)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
     </>

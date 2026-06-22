@@ -1,6 +1,6 @@
 # Install DiffGuard-AI in Another Repository
 
-DiffGuard-AI can run as a GitHub Action on pull requests. The action fetches the PR, runs the review pipeline, reads `.diffguard-rules.md` from the PR head when present, batches validated findings into one inline pull request review when their diff lines can be mapped, and falls back to a summary comment for findings that cannot be placed inline. Review runs are stored only when `DATABASE_URL` is available.
+DiffGuard-AI can run as a GitHub Action on pull requests. The action fetches the PR, runs the review pipeline, reads `.diffguard-rules.md` from the PR head when present, batches validated findings into one inline pull request review when their diff lines can be mapped, and falls back to a summary comment for findings that cannot be placed inline. Review runs and posted-finding dedupe keys are stored only when `DATABASE_URL` is available.
 
 ## Minimal Workflow
 
@@ -97,4 +97,4 @@ pnpm --filter @diffguard/cli start -- review \
   --output markdown
 ```
 
-Use `--dry-run` to fetch and review the PR without posting GitHub comments. `--max-findings` caps the total findings selected for posting. If `DATABASE_URL` is set, DiffGuard-AI skips findings whose dedupe keys already have GitHub comment IDs on the same PR and stores newly posted comment IDs for future duplicate prevention. If `DATABASE_URL` is not set, DiffGuard-AI skips database persistence.
+Use `--dry-run` to fetch and review the PR without posting GitHub comments. `--max-findings` caps the total findings selected for posting. If `DATABASE_URL` is set, DiffGuard-AI skips findings whose dedupe keys already have GitHub comment IDs on the same PR and stores newly posted comment IDs for future duplicate prevention. Dedupe keys include `owner/repo#pull-number`, file path, line number, category, and normalized title, so the same title on another file or PR is still eligible for posting. If `DATABASE_URL` is not set, DiffGuard-AI skips database persistence.

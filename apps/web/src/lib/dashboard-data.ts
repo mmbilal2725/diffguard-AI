@@ -616,6 +616,6 @@ function getApiBaseUrl(): string {
 }
 
 function isLocalDemoMode(): boolean {
-  const value = process.env.DIFFGUARD_DEMO_MODE ?? process.env.NEXT_PUBLIC_DIFFGUARD_DEMO_MODE;
+  const value = process.env.DIFFGUARD_DEMO_MODE;
   return value === "true" || value === "1";
 }

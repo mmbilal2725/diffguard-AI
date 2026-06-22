@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 
 import { PageHeader } from "@/components/dashboard/page-header";
 import { StatusBadge } from "@/components/dashboard/status-badge";
+import { StatePanel } from "@/components/dashboard/state-panel";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -123,31 +124,38 @@ export default async function ReviewDetailsPage({
             <CardDescription>Accepted, rejected, and deduplicated model findings.</CardDescription>
           </CardHeader>
           <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Finding</TableHead>
-                  <TableHead>Decision</TableHead>
-                  <TableHead>Confidence</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {run.validatorDecisions.map((decision) => (
-                  <TableRow key={decision.id}>
-                    <TableCell>
-                      <div className="flex flex-col gap-1">
-                        <span className="font-medium">{decision.finding}</span>
-                        <span className="text-xs text-muted-foreground">{decision.reason}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={decision.decision} />
-                    </TableCell>
-                    <TableCell>{formatPercent(decision.confidence)}</TableCell>
+            {run.validatorDecisions.length === 0 ? (
+              <StatePanel
+                title="No validator decisions recorded"
+                description="Validator telemetry appears after the worker stores accepted, rejected, or deduplicated finding decisions."
+              />
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Finding</TableHead>
+                    <TableHead>Decision</TableHead>
+                    <TableHead>Confidence</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {run.validatorDecisions.map((decision) => (
+                    <TableRow key={decision.id}>
+                      <TableCell>
+                        <div className="flex flex-col gap-1">
+                          <span className="font-medium">{decision.finding}</span>
+                          <span className="text-xs text-muted-foreground">{decision.reason}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <StatusBadge status={decision.decision} />
+                      </TableCell>
+                      <TableCell>{formatPercent(decision.confidence)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
           </CardContent>
         </Card>
 
@@ -157,28 +165,35 @@ export default async function ReviewDetailsPage({
             <CardDescription>Cost, token usage, model name, and latency by pipeline stage.</CardDescription>
           </CardHeader>
           <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Purpose</TableHead>
-                  <TableHead>Model</TableHead>
-                  <TableHead>Tokens</TableHead>
-                  <TableHead>Cost</TableHead>
-                  <TableHead>Latency</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {run.modelCalls.map((call) => (
-                  <TableRow key={call.id}>
-                    <TableCell className="font-medium">{call.purpose}</TableCell>
-                    <TableCell>{call.model}</TableCell>
-                    <TableCell>{call.inputTokens + call.outputTokens}</TableCell>
-                    <TableCell>{formatCurrency(call.costUsd)}</TableCell>
-                    <TableCell>{formatDuration(Math.round(call.latencyMs / 1000))}</TableCell>
+            {run.modelCalls.length === 0 ? (
+              <StatePanel
+                title="No model calls recorded"
+                description="Model name, token usage, latency, and cost appear after review-run telemetry is persisted."
+              />
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Purpose</TableHead>
+                    <TableHead>Model</TableHead>
+                    <TableHead>Tokens</TableHead>
+                    <TableHead>Cost</TableHead>
+                    <TableHead>Latency</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {run.modelCalls.map((call) => (
+                    <TableRow key={call.id}>
+                      <TableCell className="font-medium">{call.purpose}</TableCell>
+                      <TableCell>{call.model}</TableCell>
+                      <TableCell>{call.inputTokens + call.outputTokens}</TableCell>
+                      <TableCell>{formatCurrency(call.costUsd)}</TableCell>
+                      <TableCell>{formatDuration(Math.round(call.latencyMs / 1000))}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
           </CardContent>
         </Card>
       </section>

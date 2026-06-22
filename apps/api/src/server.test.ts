@@ -109,6 +109,37 @@ describe("buildApiServer", () => {
     await server.close();
   });
 
+  it("rate limits clients independently using forwarded client IPs", async () => {
+    const server = buildApiServer({
+      rateLimit: {
+        maxRequests: 1,
+        windowMs: 60_000,
+      },
+    });
+
+    const firstClient = await server.inject({
+      headers: { "x-forwarded-for": "203.0.113.10" },
+      method: "GET",
+      url: "/health",
+    });
+    const secondClient = await server.inject({
+      headers: { "x-forwarded-for": "203.0.113.11" },
+      method: "GET",
+      url: "/health",
+    });
+    const firstClientRetry = await server.inject({
+      headers: { "x-forwarded-for": "203.0.113.10" },
+      method: "GET",
+      url: "/health",
+    });
+
+    expect(firstClient.statusCode).toBe(200);
+    expect(secondClient.statusCode).toBe(200);
+    expect(firstClientRetry.statusCode).toBe(429);
+
+    await server.close();
+  });
+
   it("serves dashboard API data from the configured dashboard store", async () => {
     const dashboardStore = createDashboardStore();
     const server = buildApiServer({ dashboardApiKey: DASHBOARD_API_KEY, dashboardStore });
@@ -159,6 +190,34 @@ describe("buildApiServer", () => {
     expect(findings.json()).toEqual({ findings: dashboardReviewRun.findings });
     expect(evals.statusCode).toBe(200);
     expect(evals.json()).toEqual({ evals: [dashboardEval] });
+
+    await server.close();
+  });
+
+  it("validates dashboard response shapes without exposing unexpected secret fields", async () => {
+    const server = buildApiServer({
+      dashboardApiKey: DASHBOARD_API_KEY,
+      dashboardStore: {
+        ...createDashboardStore(),
+        getOverview: vi.fn(async () => ({
+          metrics: {
+            ...dashboardOverview.metrics,
+            rawApiKey: "sk-should-not-leak",
+          },
+          reviewTrend: dashboardOverview.reviewTrend,
+        })),
+      },
+    });
+
+    const response = await server.inject({
+      headers: dashboardAuthHeaders(),
+      method: "GET",
+      url: "/dashboard/overview",
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ error: "Dashboard response failed validation." });
+    expect(response.body).not.toContain("sk-should-not-leak");
 
     await server.close();
   });

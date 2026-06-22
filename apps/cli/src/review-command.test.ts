@@ -11,6 +11,7 @@ import type { LlmProvider } from "@diffguard/llm";
 
 import {
   buildMarkdownSummary,
+  formatCliError,
   parseReviewCommandOptions,
   runReviewCommand,
   type ReviewCommandDependencies,
@@ -54,6 +55,8 @@ describe("review command", () => {
       "gpt-4.1",
       "--output",
       "json",
+      "--review-passes",
+      "security-bugs,regression-test-gaps",
     ]);
 
     expect(options).toEqual({
@@ -66,7 +69,20 @@ describe("review command", () => {
       owner: "acme",
       pullNumber: 42,
       repo: "widgets",
+      reviewPasses: "security-bugs,regression-test-gaps",
     });
+  });
+
+  it("prints clear validation errors for missing required review inputs", () => {
+    expect(() => parseReviewCommandOptions(["review", "--repo", "widgets", "--pull-number", "42"])).toThrow(
+      "Missing required option --owner.",
+    );
+    expect(() => parseReviewCommandOptions(["review", "--owner", "acme", "--pull-number", "42"])).toThrow(
+      "Missing required option --repo.",
+    );
+    expect(() => parseReviewCommandOptions(["review", "--owner", "acme", "--repo", "widgets"])).toThrow(
+      "Missing required option --pull-number.",
+    );
   });
 
   it("accepts the npm script separator before review options", () => {
@@ -231,7 +247,7 @@ describe("review command", () => {
     ]);
   });
 
-  it("does not post findings that only target deleted files", async () => {
+  it("falls back to a summary comment for findings that only target deleted files", async () => {
     const createdReviews: CreatePullRequestReviewInput[] = [];
     const postedComments: PostPullRequestCommentInput[] = [];
     const dependencies = createDependencies({
@@ -277,8 +293,13 @@ describe("review command", () => {
     );
 
     expect(createdReviews).toEqual([]);
-    expect(postedComments).toEqual([]);
-    expect(result.posted).toBe(false);
+    expect(postedComments).toEqual([
+      {
+        body: result.summary,
+        ref: { owner: "acme", repo: "widgets", number: 42 },
+      },
+    ]);
+    expect(result.posted).toBe(true);
   });
 
   it("falls back to a summary comment when a finding cannot be mapped to the diff", async () => {
@@ -332,7 +353,7 @@ describe("review command", () => {
         createdReviews.push(input);
       },
       loadPostedFindingDedupeKeys: async () =>
-        new Set(["src/admin.ts:12:authorization:admin route misses authorization"]),
+        new Set(["acme/widgets#42:src/admin.ts:12:authorization:admin route misses authorization"]),
       postComment: async (input) => {
         postedComments.push(input);
       },
@@ -491,6 +512,47 @@ describe("review command", () => {
     expect(JSON.parse(result.output)).toMatchObject({
       warnings: ["OPENAI_API_KEY is not configured; skipping LLM review safely."],
     });
+  });
+
+  it("uses GitHub App auth when a token is not provided", async () => {
+    const createdClients: Array<{ authToken: string }> = [];
+    const dependencies = createDependencies({
+      createGitHubClient: (config) => {
+        createdClients.push(config);
+        return dependencies.githubClient;
+      },
+      createInstallationToken: async (input) => {
+        expect(input).toEqual({
+          appId: "12345",
+          installationId: "98765",
+          privateKey: "private-key",
+        });
+
+        return {
+          expiresAt: "2026-06-22T00:00:00.000Z",
+          token: "ghs_installation_token",
+        };
+      },
+      env: {
+        GITHUB_APP_ID: "12345",
+        GITHUB_APP_INSTALLATION_ID: "98765",
+        GITHUB_APP_PRIVATE_KEY: "private-key",
+      },
+    });
+
+    await runReviewCommand(
+      {
+        dryRun: true,
+        minConfidence: 0.7,
+        output: "json",
+        owner: "acme",
+        pullNumber: 42,
+        repo: "widgets",
+      },
+      dependencies,
+    );
+
+    expect(createdClients).toEqual([{ authToken: "ghs_installation_token" }]);
   });
 
   it("passes static check disablement from DIFFGUARD_STATIC_CHECKS to the pipeline", async () => {
@@ -713,13 +775,13 @@ describe("review command", () => {
     ).rejects.toThrow("LLM structured output did not match the ReviewFinding schema.");
   });
 
-  it("runs only the selected DIFFGUARD_REVIEW_PASSES", async () => {
+  it("runs only the selected review passes from CLI options", async () => {
     const provider = createFakeLlmProvider([
       {
         findings: [
           createFinding({
-            category: "authorization",
-            title: "Admin route returns data before auth",
+            category: "testing",
+            title: "Behavior change lacks regression coverage",
           }),
         ],
       },
@@ -749,15 +811,26 @@ describe("review command", () => {
         owner: "acme",
         pullNumber: 42,
         repo: "widgets",
+        reviewPasses: "regression-test-gaps",
       },
       dependencies,
     );
 
     expect(provider.requests).toHaveLength(1);
-    expect(provider.requests[0]?.messages[0]?.content).toContain("Focus on security bugs");
+    expect(provider.requests[0]?.messages[0]?.content).toContain("Focus on regression risks");
     expect(JSON.parse(result.output)).toMatchObject({
-      modelCalls: [expect.objectContaining({ templateId: "security-bugs" })],
+      modelCalls: [expect.objectContaining({ templateId: "regression-test-gaps" })],
     });
+  });
+
+  it("redacts secrets from CLI error messages", () => {
+    const message = formatCliError(
+      new Error("GitHub request failed for token ghs_supersecret and privateKey=-----BEGIN PRIVATE KEY-----abc"),
+    );
+
+    expect(message).toContain("[redacted]");
+    expect(message).not.toContain("ghs_supersecret");
+    expect(message).not.toContain("PRIVATE KEY");
   });
 
   it("formats a low-noise markdown summary", () => {

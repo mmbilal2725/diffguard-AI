@@ -65,7 +65,7 @@ Do not log the private key, webhook secret, dashboard API key, or installation t
 5. The API creates a queued review run and adds a BullMQ `review-pr` job.
 6. The worker creates a short-lived installation token for the job installation id.
 7. The worker runs the review pipeline with an installation-token GitHub client.
-8. The worker uses `packages/review-run` to post validated inline or fallback comments, skip previously posted duplicate findings, and store the completed review run plus finding records when `DATABASE_URL` is configured.
+8. The worker uses `packages/review-run` to post validated inline or fallback comments, skip previously posted duplicate findings, and store the completed review run plus finding records when `DATABASE_URL` is configured. Dedupe keys are scoped to `owner/repo#pull-number`, file path, line number, category, and normalized title so later `pull_request.synchronize` jobs suppress the exact finding already posted on that PR without suppressing the same title elsewhere.
 
 Webhook responses intentionally avoid echoing request payloads, secrets,
 signatures, private keys, or installation tokens.

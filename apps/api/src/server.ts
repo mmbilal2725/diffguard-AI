@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 
 import { REVIEW_QUEUE_JOB_NAME, type ReviewJobData } from "@diffguard/shared";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import { z } from "zod";
 
 import { createPrismaDashboardStore, type DashboardStore } from "./dashboard-store.js";
 import { toReviewWebhookRequest, readWebhookAction } from "./github-webhook.js";
@@ -24,6 +25,164 @@ export type BuildApiServerOptions = {
   webhookSecret?: string;
 };
 
+const ReviewRunStatusSchema = z.enum([
+  "queued",
+  "analyzing",
+  "validating",
+  "completed",
+  "failed",
+  "skipped",
+]);
+
+const ValidatorDecisionSchema = z.enum(["accepted", "rejected", "deduplicated"]);
+const GitHubCommentStatusSchema = z.enum(["posted", "skipped", "pending", "failed"]);
+const FindingSeveritySchema = z.enum(["critical", "high", "medium"]);
+
+const DashboardFindingSchema = z
+  .object({
+    confidence: z.number(),
+    file: z.string(),
+    id: z.string(),
+    line: z.number().int(),
+    severity: FindingSeveritySchema,
+    status: GitHubCommentStatusSchema,
+    summary: z.string(),
+    title: z.string(),
+  })
+  .strict();
+
+const DashboardReviewRunSchema = z
+  .object({
+    candidatesCount: z.number().int().nonnegative(),
+    confidenceThreshold: z.number(),
+    costUsd: z.number(),
+    createdAt: z.string(),
+    findings: z.array(DashboardFindingSchema),
+    findingsCount: z.number().int().nonnegative(),
+    githubCommentStatus: GitHubCommentStatusSchema,
+    id: z.string(),
+    latencySeconds: z.number(),
+    modelCalls: z.array(
+      z
+        .object({
+          costUsd: z.number(),
+          id: z.string(),
+          inputTokens: z.number().int().nonnegative(),
+          latencyMs: z.number().int().nonnegative(),
+          model: z.string(),
+          outputTokens: z.number().int().nonnegative(),
+          purpose: z.string(),
+        })
+        .strict(),
+    ),
+    prNumber: z.number().int().positive(),
+    repo: z.string(),
+    status: ReviewRunStatusSchema,
+    title: z.string(),
+    validatorDecisions: z.array(
+      z
+        .object({
+          confidence: z.number(),
+          decision: ValidatorDecisionSchema,
+          finding: z.string(),
+          id: z.string(),
+          reason: z.string(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
+const DashboardRepositorySchema = z
+  .object({
+    confidenceThreshold: z.number(),
+    enabled: z.boolean(),
+    id: z.string(),
+    installation: z.string(),
+    lastReviewedAt: z.string(),
+    maxFindingsPerPr: z.number().int().positive(),
+    repo: z.string(),
+    rulesPath: z.string(),
+  })
+  .strict();
+
+const DashboardEvalSummarySchema = z
+  .object({
+    cases: z.number().int().nonnegative(),
+    costUsd: z.number(),
+    createdAt: z.string(),
+    falseNegatives: z.number().int().nonnegative(),
+    falsePositives: z.number().int().nonnegative(),
+    id: z.string(),
+    name: z.string(),
+    precision: z.number(),
+    recall: z.number(),
+  })
+  .strict();
+
+const DashboardMetricsSchema = z
+  .object({
+    averageLatencySeconds: z.number(),
+    estimatedResolutionRate: z.number(),
+    falsePositiveFindings: z.number().int().nonnegative(),
+    findingsPosted: z.number().int().nonnegative(),
+    resolvedFindings: z.number().int().nonnegative(),
+    totalCostUsd: z.number(),
+    totalPrsReviewed: z.number().int().nonnegative(),
+    unknownFindings: z.number().int().nonnegative(),
+    unresolvedFindings: z.number().int().nonnegative(),
+    validatorRejectionRate: z.number(),
+  })
+  .strict();
+
+const ReviewTrendPointSchema = z
+  .object({
+    cost: z.number(),
+    day: z.string(),
+    findings: z.number().int().nonnegative(),
+    latency: z.number(),
+    prs: z.number().int().nonnegative(),
+    rejected: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const DashboardOverviewResponseSchema = z
+  .object({
+    metrics: DashboardMetricsSchema,
+    reviewTrend: z.array(ReviewTrendPointSchema),
+  })
+  .strict();
+
+const DashboardReviewRunsResponseSchema = z
+  .object({
+    reviewRuns: z.array(DashboardReviewRunSchema),
+  })
+  .strict();
+
+const DashboardReviewRunResponseSchema = z
+  .object({
+    reviewRun: DashboardReviewRunSchema,
+  })
+  .strict();
+
+const DashboardRepositoriesResponseSchema = z
+  .object({
+    repositories: z.array(DashboardRepositorySchema),
+  })
+  .strict();
+
+const DashboardFindingsResponseSchema = z
+  .object({
+    findings: z.array(DashboardFindingSchema),
+  })
+  .strict();
+
+const DashboardEvalsResponseSchema = z
+  .object({
+    evals: z.array(DashboardEvalSummarySchema),
+  })
+  .strict();
+
 export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInstance {
   const server = Fastify({
     logger: false
@@ -43,7 +202,7 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
       now: Date.now(),
       rateLimit,
       state: rateLimitState,
-      clientId: request.ip,
+      clientId: readClientId(request),
     });
 
     reply.header("x-ratelimit-limit", String(rateLimit.maxRequests));
@@ -85,7 +244,7 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
 
     const dashboardStore =
       options.dashboardStore ?? (defaultDashboardStore ??= await createDefaultDashboardStore());
-    return dashboardStore.getOverview();
+    return sendValidatedDashboardResponse(reply, DashboardOverviewResponseSchema, await dashboardStore.getOverview());
   });
 
   server.get("/dashboard/review-runs", async (request, reply) => {
@@ -96,7 +255,9 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
 
     const dashboardStore =
       options.dashboardStore ?? (defaultDashboardStore ??= await createDefaultDashboardStore());
-    return { reviewRuns: await dashboardStore.listReviewRuns() };
+    return sendValidatedDashboardResponse(reply, DashboardReviewRunsResponseSchema, {
+      reviewRuns: await dashboardStore.listReviewRuns(),
+    });
   });
 
   server.get<{ Params: { id: string } }>("/dashboard/review-runs/:id", async (request, reply) => {
@@ -113,7 +274,7 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
       return reply.code(404).send({ error: "Review run not found." });
     }
 
-    return { reviewRun };
+    return sendValidatedDashboardResponse(reply, DashboardReviewRunResponseSchema, { reviewRun });
   });
 
   server.get("/dashboard/repositories", async (request, reply) => {
@@ -124,7 +285,9 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
 
     const dashboardStore =
       options.dashboardStore ?? (defaultDashboardStore ??= await createDefaultDashboardStore());
-    return { repositories: await dashboardStore.listRepositories() };
+    return sendValidatedDashboardResponse(reply, DashboardRepositoriesResponseSchema, {
+      repositories: await dashboardStore.listRepositories(),
+    });
   });
 
   server.get("/dashboard/findings", async (request, reply) => {
@@ -135,7 +298,9 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
 
     const dashboardStore =
       options.dashboardStore ?? (defaultDashboardStore ??= await createDefaultDashboardStore());
-    return { findings: await dashboardStore.listFindings() };
+    return sendValidatedDashboardResponse(reply, DashboardFindingsResponseSchema, {
+      findings: await dashboardStore.listFindings(),
+    });
   });
 
   server.get("/dashboard/evals", async (request, reply) => {
@@ -146,7 +311,9 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
 
     const dashboardStore =
       options.dashboardStore ?? (defaultDashboardStore ??= await createDefaultDashboardStore());
-    return { evals: await dashboardStore.listEvalSummaries() };
+    return sendValidatedDashboardResponse(reply, DashboardEvalsResponseSchema, {
+      evals: await dashboardStore.listEvalSummaries(),
+    });
   });
 
   server.post("/webhooks/github", async (request, reply) => {
@@ -243,6 +410,28 @@ function readRawPayload(request: FastifyRequest): string {
 function readHeader(request: FastifyRequest, name: string): string | undefined {
   const value = request.headers[name];
   return typeof value === "string" ? value : undefined;
+}
+
+function readClientId(request: FastifyRequest): string {
+  const forwardedFor = readHeader(request, "x-forwarded-for")
+    ?.split(",")[0]
+    ?.trim();
+  const realIp = readHeader(request, "x-real-ip")?.trim();
+
+  return forwardedFor || realIp || request.ip;
+}
+
+function sendValidatedDashboardResponse<T>(
+  reply: FastifyReply,
+  schema: z.ZodType<T>,
+  data: unknown,
+): T | FastifyReply {
+  const parsed = schema.safeParse(data);
+  if (!parsed.success) {
+    return reply.code(500).send({ error: "Dashboard response failed validation." });
+  }
+
+  return parsed.data;
 }
 
 function readAllowedOrigins(options: BuildApiServerOptions): string[] {

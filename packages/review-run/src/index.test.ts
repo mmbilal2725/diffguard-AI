@@ -16,6 +16,7 @@ import {
   finalizeReviewRun,
   loadPostedFindingDedupeKeysFromDatabase,
   markReviewRunFailedInDatabase,
+  planReviewPosting,
   storeReviewRunInDatabase,
   type PrismaClientLike,
 } from "./index.js";
@@ -113,7 +114,7 @@ describe("review-run finalization", () => {
         },
       }),
       loadPostedFindingDedupeKeys: async () =>
-        new Set(["src/admin.ts:12:authorization:admin route misses authorization"]),
+        new Set(["acme/widgets#42:src/admin.ts:12:authorization:admin route misses authorization"]),
       ref: { owner: "acme", repo: "widgets", number: 42 },
       result: createReviewResult(),
     });
@@ -124,6 +125,43 @@ describe("review-run finalization", () => {
       }),
     ]);
     expect(finalized.result.findings.map((finding) => finding.filePath)).toEqual(["src/widget.ts"]);
+  });
+
+  it("does not skip the same normalized title on a different file", async () => {
+    const createdReviews: CreatePullRequestReviewInput[] = [];
+    const sameTitleDifferentFile = createFinding({
+      category: "authorization",
+      evidence: "The widget route also returns data before requireAdmin() runs.",
+      filePath: "src/widget.ts",
+      improvedComment: "Call requireAdmin() before returning widget data.",
+      line: 20,
+      summary: "The widget route returns data before checking admin access.",
+      title: "Admin route misses authorization",
+      whyItMatters: "Non-admin users could read private widget data.",
+    });
+
+    const finalized = await finalizeReviewRun({
+      dryRun: false,
+      githubClient: createGitHubClientDouble({
+        createReview: async (input) => {
+          createdReviews.push(input);
+        },
+      }),
+      loadPostedFindingDedupeKeys: async () =>
+        new Set(["acme/widgets#42:src/admin.ts:12:authorization:admin route misses authorization"]),
+      ref: { owner: "acme", repo: "widgets", number: 42 },
+      result: createReviewResult({
+        findings: [createFinding(), sameTitleDifferentFile],
+      }),
+    });
+
+    expect(createdReviews[0]?.comments).toEqual([
+      expect.objectContaining({
+        body: "Call requireAdmin() before returning widget data.",
+        path: "src/widget.ts",
+      }),
+    ]);
+    expect(finalized.result.findings).toEqual([sameTitleDifferentFile]);
   });
 
   it("does not post comments in dry-run mode but can store the review run", async () => {
@@ -162,7 +200,7 @@ describe("review-run finalization", () => {
       posted: true,
       postedFindings: [
         {
-          dedupeKey: "src/admin.ts:12:authorization:admin route misses authorization",
+          dedupeKey: "acme/widgets#42:src/admin.ts:12:authorization:admin route misses authorization",
           githubCommentId: "901",
           line: 12,
           path: "src/admin.ts",
@@ -179,7 +217,7 @@ describe("review-run finalization", () => {
       "validatorDecision.createMany",
     ]);
     expect(prisma.findingCreateManyInput?.data[0]).toMatchObject({
-      dedupeKey: "src/admin.ts:12:authorization:admin route misses authorization",
+      dedupeKey: "acme/widgets#42:src/admin.ts:12:authorization:admin route misses authorization",
       githubCommentId: "901",
       status: "POSTED",
     });
@@ -195,7 +233,7 @@ describe("review-run finalization", () => {
       posted: true,
       postedFindings: [
         {
-          dedupeKey: "src/admin.ts:12:authorization:admin route misses authorization",
+          dedupeKey: "acme/widgets#42:src/admin.ts:12:authorization:admin route misses authorization",
           githubCommentId: "901",
           line: 12,
           path: "src/admin.ts",
@@ -324,7 +362,7 @@ describe("review-run finalization", () => {
   it("loads posted finding dedupe keys from Prisma", async () => {
     const prisma = createPrismaDouble([]);
     prisma.findingFindManyResult = [
-      { dedupeKey: "src/admin.ts:12:authorization:admin route misses authorization" },
+      { dedupeKey: "acme/widgets#42:src/admin.ts:12:authorization:admin route misses authorization" },
     ];
 
     const keys = await loadPostedFindingDedupeKeysFromDatabase({
@@ -332,7 +370,9 @@ describe("review-run finalization", () => {
       ref: { owner: "acme", repo: "widgets", number: 42 },
     });
 
-    expect([...keys]).toEqual(["src/admin.ts:12:authorization:admin route misses authorization"]);
+    expect([...keys]).toEqual([
+      "acme/widgets#42:src/admin.ts:12:authorization:admin route misses authorization",
+    ]);
     expect(prisma.findingFindManyInput?.where.reviewRun.pullRequest.repository).toEqual({
       name: "widgets",
       owner: "acme",
@@ -341,12 +381,77 @@ describe("review-run finalization", () => {
   });
 
   it("formats summaries and stable dedupe keys", () => {
-    expect(buildFindingDedupeKey(createFinding())).toBe(
-      "src/admin.ts:12:authorization:admin route misses authorization",
+    expect(
+      buildFindingDedupeKey({ owner: "acme", repo: "widgets", number: 42 }, createFinding()),
+    ).toBe(
+      "acme/widgets#42:src/admin.ts:12:authorization:admin route misses authorization",
     );
     expect(
       buildMarkdownSummary(createReviewResult(), { dryRun: true, minConfidence: 0.8 }),
     ).toContain("## DiffGuard-AI Review");
+  });
+
+  it("maps findings to valid inline diff lines", () => {
+    const planned = planReviewPosting(createReviewResult());
+
+    expect(planned.inline).toEqual([
+      expect.objectContaining({
+        comment: expect.objectContaining({
+          line: 12,
+          path: "src/admin.ts",
+          side: "RIGHT",
+        }),
+      }),
+      expect.objectContaining({
+        comment: expect.objectContaining({
+          line: 20,
+          path: "src/widget.ts",
+          side: "RIGHT",
+        }),
+      }),
+    ]);
+    expect(planned.fallback).toEqual([]);
+  });
+
+  it("falls back to a summary comment when a changed diff line is no longer available", async () => {
+    const createdReviews: CreatePullRequestReviewInput[] = [];
+    const postedComments: PostPullRequestCommentInput[] = [];
+
+    const finalized = await finalizeReviewRun({
+      dryRun: false,
+      githubClient: createGitHubClientDouble({
+        createReview: async (input) => {
+          createdReviews.push(input);
+        },
+        postComment: async (input) => {
+          postedComments.push(input);
+        },
+      }),
+      ref: { owner: "acme", repo: "widgets", number: 42 },
+      result: createReviewResult({
+        findings: [
+          createFinding({
+            line: 44,
+            summary: "The finding references a line that is no longer in the latest PR diff.",
+            title: "Changed line no longer available",
+          }),
+        ],
+      }),
+    });
+
+    expect(createdReviews).toEqual([]);
+    expect(postedComments).toEqual([
+      expect.objectContaining({
+        body: expect.stringContaining("Changed line no longer available"),
+      }),
+    ]);
+    expect(finalized.postedFindings).toEqual([
+      expect.objectContaining({
+        githubCommentId: "1",
+        line: 44,
+        path: "src/admin.ts",
+      }),
+    ]);
   });
 });
 

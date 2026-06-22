@@ -50,9 +50,12 @@ happens after this package returns a
 `ReviewResult`: `packages/review-run` caps findings, skips previously posted
 dedupe keys when database state is available, uses the shared unified diff
 parser to map findings to diff-valid lines, batches inline GitHub review
-comments into one review, posts a summary issue comment only for findings that
-cannot be mapped inline, and stores review-run/finding records. The CLI and
-GitHub App worker both use this shared finalization package. If no validator is
+comments into one review, posts a summary issue comment for findings that cannot
+be mapped inline, and stores review-run/finding records. Stored finding dedupe
+keys are scoped to `owner/repo#pull-number`, file path, line number, category,
+and normalized title so updated PRs skip only the exact finding that was already
+posted on that PR. The CLI and GitHub App worker both use this shared
+finalization package. If no validator is
 configured, the default validator rejects candidates so DiffGuard-AI prefers
 silence over posting unvalidated comments.
 

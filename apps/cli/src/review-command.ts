@@ -1,6 +1,8 @@
 import {
+  createGitHubAppInstallationToken,
   createGitHubClient,
   type DiffGuardGitHubClient,
+  type GitHubAppInstallationToken,
   type PullRequestRef,
 } from "@diffguard/github";
 import {
@@ -30,11 +32,31 @@ import { z } from "zod";
 
 const DEFAULT_MIN_CONFIDENCE = 0.7;
 const DEFAULT_OUTPUT_FORMAT = "markdown";
+const AUTH_REQUIRED_MESSAGE =
+  "GitHub authentication is required. Pass --github-token, set GITHUB_TOKEN, or provide GitHub App auth with --github-app-id, --github-app-installation-id, and --github-app-private-key.";
+const SUPPORTED_REVIEW_OPTIONS = new Set([
+  "dry-run",
+  "github-app-id",
+  "github-app-installation-id",
+  "github-app-private-key",
+  "github-token",
+  "max-findings",
+  "min-confidence",
+  "model",
+  "output",
+  "owner",
+  "pull-number",
+  "repo",
+  "review-passes",
+]);
 
 export { buildMarkdownSummary };
 
 const ReviewCommandOptionsSchema = z.object({
   dryRun: z.boolean().default(false),
+  githubAppId: z.string().min(1).optional(),
+  githubAppInstallationId: z.string().min(1).optional(),
+  githubAppPrivateKey: z.string().min(1).optional(),
   githubToken: z.string().min(1).optional(),
   maxFindings: z.number().int().positive().optional(),
   minConfidence: z.number().min(0).max(1).default(DEFAULT_MIN_CONFIDENCE),
@@ -43,6 +65,7 @@ const ReviewCommandOptionsSchema = z.object({
   owner: z.string().min(1),
   pullNumber: z.number().int().positive(),
   repo: z.string().min(1),
+  reviewPasses: z.string().min(1).optional(),
 });
 
 export type ReviewCommandOptions = z.infer<typeof ReviewCommandOptionsSchema>;
@@ -57,6 +80,11 @@ export type ReviewCommandResult = {
 
 export type ReviewCommandDependencies = {
   createGitHubClient?: (config: { authToken: string }) => DiffGuardGitHubClient;
+  createInstallationToken?: (input: {
+    appId: string;
+    installationId: string;
+    privateKey: string;
+  }) => Promise<GitHubAppInstallationToken>;
   createLlmProvider?: (config: { apiKey: string; model?: string }) => LlmProvider;
   env?: Record<string, string | undefined>;
   findingValidator?: FindingValidator;
@@ -76,8 +104,13 @@ export function parseReviewCommandOptions(argv: string[]): ReviewCommandOptions 
 
   const parsed = parseArgs(args);
 
-  return ReviewCommandOptionsSchema.parse({
+  validateRequiredReviewOptions(parsed);
+
+  return parseReviewCommandSchema({
     dryRun: parsed["dry-run"] ?? false,
+    githubAppId: parsed["github-app-id"],
+    githubAppInstallationId: parsed["github-app-installation-id"],
+    githubAppPrivateKey: parsed["github-app-private-key"],
     githubToken: parsed["github-token"],
     maxFindings: parsed["max-findings"],
     minConfidence: parsed["min-confidence"],
@@ -86,6 +119,7 @@ export function parseReviewCommandOptions(argv: string[]): ReviewCommandOptions 
     owner: parsed.owner,
     pullNumber: parsed["pull-number"],
     repo: parsed.repo,
+    reviewPasses: parsed["review-passes"],
   });
 }
 
@@ -98,11 +132,7 @@ export async function runReviewCommand(
   dependencies: ReviewCommandDependencies = {},
 ): Promise<ReviewCommandResult> {
   const env = dependencies.env ?? process.env;
-  const authToken = options.githubToken ?? env.GITHUB_TOKEN;
-
-  if (authToken === undefined || authToken.trim() === "") {
-    throw new Error("GitHub token is required. Pass --github-token or set GITHUB_TOKEN.");
-  }
+  const authToken = await resolveGitHubAuthToken(options, dependencies, env);
 
   const githubClientFactory = dependencies.createGitHubClient ?? createGitHubClient;
   const githubClient = githubClientFactory({ authToken });
@@ -111,6 +141,7 @@ export async function runReviewCommand(
     createLlmProvider: dependencies.createLlmProvider,
     env,
     model: options.model,
+    reviewPasses: options.reviewPasses,
   });
   const findingValidator = dependencies.findingValidator ?? llmReviewerSetup.findingValidator;
   const pipelineInput: RunReviewPipelineInput = {
@@ -193,6 +224,9 @@ function parseArgs(args: string[]): Record<string, ParsedArgValue> {
       throw new Error(`Unexpected argument: ${arg}`);
     }
     const key = rawKey;
+    if (!SUPPORTED_REVIEW_OPTIONS.has(key)) {
+      throw new Error(`Unknown option --${key}.`);
+    }
 
     if (key === "dry-run") {
       parsed[key] = inlineValue === undefined ? true : inlineValue === "true";
@@ -214,6 +248,105 @@ function parseArgs(args: string[]): Record<string, ParsedArgValue> {
   return parsed;
 }
 
+function validateRequiredReviewOptions(parsed: Record<string, ParsedArgValue>): void {
+  if (typeof parsed.owner !== "string" || parsed.owner.trim() === "") {
+    throw new Error("Missing required option --owner.");
+  }
+  if (typeof parsed.repo !== "string" || parsed.repo.trim() === "") {
+    throw new Error("Missing required option --repo.");
+  }
+  if (parsed["pull-number"] === undefined) {
+    throw new Error("Missing required option --pull-number.");
+  }
+}
+
+function parseReviewCommandSchema(input: Record<string, ParsedArgValue>): ReviewCommandOptions {
+  const result = ReviewCommandOptionsSchema.safeParse(input);
+  if (result.success) {
+    return result.data;
+  }
+
+  throw new Error(formatReviewOptionError(result.error));
+}
+
+function formatReviewOptionError(error: z.ZodError): string {
+  const issue = error.issues[0];
+  const path = issue?.path[0];
+
+  if (path === "pullNumber") {
+    return "--pull-number must be a positive integer.";
+  }
+  if (path === "minConfidence") {
+    return "--min-confidence must be between 0 and 1.";
+  }
+  if (path === "maxFindings") {
+    return "--max-findings must be a positive integer.";
+  }
+  if (path === "output") {
+    return "--output must be markdown or json.";
+  }
+  if (path === "reviewPasses") {
+    return "--review-passes must be a comma-separated list of review pass ids.";
+  }
+
+  return issue?.message ?? "Invalid review command options.";
+}
+
+async function resolveGitHubAuthToken(
+  options: ReviewCommandOptions,
+  dependencies: ReviewCommandDependencies,
+  env: Record<string, string | undefined>,
+): Promise<string> {
+  const directToken = firstNonEmpty(options.githubToken, env.GITHUB_TOKEN);
+  if (directToken !== undefined) {
+    return directToken;
+  }
+
+  const appId = firstNonEmpty(options.githubAppId, env.GITHUB_APP_ID);
+  const installationId = firstNonEmpty(
+    options.githubAppInstallationId,
+    env.GITHUB_APP_INSTALLATION_ID,
+  );
+  const privateKey = normalizePrivateKey(
+    firstNonEmpty(options.githubAppPrivateKey, env.GITHUB_APP_PRIVATE_KEY),
+  );
+  const hasPartialAppAuth =
+    appId !== undefined || installationId !== undefined || privateKey !== undefined;
+
+  if (!hasPartialAppAuth) {
+    throw new Error(AUTH_REQUIRED_MESSAGE);
+  }
+
+  if (appId === undefined || installationId === undefined || privateKey === undefined) {
+    throw new Error(AUTH_REQUIRED_MESSAGE);
+  }
+
+  const createInstallationToken =
+    dependencies.createInstallationToken ?? createGitHubAppInstallationToken;
+  const installationToken = await createInstallationToken({
+    appId,
+    installationId,
+    privateKey,
+  });
+
+  return installationToken.token;
+}
+
+function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed !== undefined && trimmed !== "") {
+      return trimmed;
+    }
+  }
+
+  return undefined;
+}
+
+function normalizePrivateKey(value: string | undefined): string | undefined {
+  return value?.replace(/\\n/g, "\n");
+}
+
 function parseArgValue(key: string, value: string): ParsedArgValue {
   if (key === "pull-number" || key === "max-findings") {
     return Number.parseInt(value, 10);
@@ -230,6 +363,7 @@ function buildDefaultLlmReviewerInput(input: {
   createLlmProvider?: (config: { apiKey: string; model?: string }) => LlmProvider;
   env: Record<string, string | undefined>;
   model?: string;
+  reviewPasses?: string;
 }): { findingValidator?: FindingValidator; llmReviewer?: LlmReviewer; warnings: string[] } {
   const apiKey = input.env.OPENAI_API_KEY;
   if (apiKey === undefined || apiKey.trim() === "") {
@@ -242,7 +376,7 @@ function buildDefaultLlmReviewerInput(input: {
     apiKey,
     model: input.model,
   });
-  const passes = parseReviewPasses(input.env.DIFFGUARD_REVIEW_PASSES);
+  const passes = parseReviewPasses(input.reviewPasses ?? input.env.DIFFGUARD_REVIEW_PASSES);
   const validatorModel = resolveValidatorModel(input.env);
 
   return {
@@ -381,4 +515,23 @@ function appendWarningsToMarkdown(summary: string, warnings: string[]): string {
   }
 
   return `${summary}\n\n## Warnings\n${warnings.map((warning) => `- ${warning}`).join("\n")}`;
+}
+
+export function formatCliError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "Unknown DiffGuard-AI CLI error.";
+
+  return redactSecretLikeValues(message);
+}
+
+function redactSecretLikeValues(message: string): string {
+  return message
+    .replace(
+      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
+      "[redacted]",
+    )
+    .replace(/\b(?:sk|gh[pousr]|github_pat)[-_][A-Za-z0-9_-]{4,}\b/g, "[redacted]")
+    .replace(
+      /\b(private[_-]?key|github[_-]?token|token|secret|api[_-]?key|password|passwd|pwd)\s*[:=]\s*["']?[^"',\s]+/gi,
+      "$1=[redacted]",
+    );
 }

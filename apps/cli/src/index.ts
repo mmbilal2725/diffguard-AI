@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { parseEvalCommandOptions, runEvalCommand } from "./eval-command.js";
-import { parseReviewCommandOptions, runReviewCommand } from "./review-command.js";
+import { formatCliError, parseReviewCommandOptions, runReviewCommand } from "./review-command.js";
 
 async function main(): Promise<void> {
   const argv = normalizeCliArgv(process.argv.slice(2));
@@ -22,8 +22,6 @@ function normalizeCliArgv(argv: string[]): string[] {
 }
 
 main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : "Unknown DiffGuard-AI CLI error.";
-
-  process.stderr.write(`${message}\n`);
+  process.stderr.write(`${formatCliError(error)}\n`);
   process.exitCode = 1;
 });

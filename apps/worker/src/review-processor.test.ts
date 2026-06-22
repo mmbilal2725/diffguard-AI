@@ -326,7 +326,7 @@ describe("createReviewProcessor", () => {
         posted: true,
         postedFindings: [
           {
-            dedupeKey: "src/admin.ts:12:authorization:admin route misses authorization",
+            dedupeKey: "acme/widgets#42:src/admin.ts:12:authorization:admin route misses authorization",
             githubCommentId: "901",
             line: 12,
             path: "src/admin.ts",
@@ -386,7 +386,7 @@ describe("createReviewProcessor", () => {
       posted: true,
       postedFindings: [
         {
-          dedupeKey: "src/admin.ts:12:authorization:admin route misses authorization",
+          dedupeKey: "acme/widgets#42:src/admin.ts:12:authorization:admin route misses authorization",
           githubCommentId: "901",
           line: 12,
           path: "src/admin.ts",

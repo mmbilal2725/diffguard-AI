@@ -49,8 +49,9 @@ Runtime flow:
    building and GitHub comment mapping.
 10. Worker runs static checks and structured LLM review passes when configured.
 11. Worker validates, deduplicates, and posts only high-confidence findings.
-12. Inline-capable findings are batched into one GitHub review; unmapped findings use
-    a summary issue comment fallback.
+12. Inline-capable findings are batched into one GitHub review; unmapped findings,
+    including stale lines no longer present in the latest diff, use a summary issue
+    comment fallback.
 13. Metrics, GitHub comment IDs, and feedback events are stored for quality tracking.
 
 ## Database Persistence
@@ -67,6 +68,12 @@ validator decisions. Worker failure paths store a bounded, redacted error messag
 for debugging without retaining raw tokens, API keys, private keys, or passwords.
 Dashboard-oriented indexes cover common status, time, pull request, model, and
 validator-decision queries.
+
+Finding dedupe keys are generated from `owner/repo#pull-number`, file path, line
+number, category, and normalized title. `packages/review-run` loads already
+posted keys for the current PR before posting so synchronize events do not
+repost the same finding, while the same title on another file or PR remains
+eligible.
 
 ## Resolution Tracking
 

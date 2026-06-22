@@ -105,7 +105,7 @@ See [docs/architecture.md](docs/architecture.md) for more detail.
 7. A validator pass checks whether each finding is real, actionable, and safe to post.
 8. Duplicate findings are removed.
 9. Confidence thresholds and false-positive-risk checks filter remaining candidates.
-10. GitHub comments are posted inline when the line can be mapped, with a summary fallback otherwise.
+10. GitHub comments are posted inline when the line can be mapped, with a summary fallback otherwise. Posted finding dedupe keys include repository, PR number, file path, line number, category, and normalized title.
 11. Metrics and eval data are stored for dashboarding and regression checks.
 
 The default validator rejects findings when no validator is configured. This is deliberate: the project optimizes for high-confidence review comments over volume.
@@ -216,6 +216,41 @@ pnpm.cmd prisma:generate
 pnpm.cmd prisma:migrate
 pnpm.cmd dev
 ```
+
+## CLI Usage
+
+Run a dry PR review from this monorepo with a GitHub token:
+
+```powershell
+$env:GITHUB_TOKEN = "ghp_REPLACE_ME"
+$env:OPENAI_API_KEY = "sk_REPLACE_ME"
+pnpm.cmd --filter @diffguard/cli start -- review `
+  --owner OWNER `
+  --repo REPO `
+  --pull-number PR_NUMBER `
+  --dry-run `
+  --min-confidence 0.8 `
+  --max-findings 5 `
+  --review-passes logic-bugs,security-bugs,regression-test-gaps `
+  --output markdown
+```
+
+Use JSON output for automation:
+
+```powershell
+pnpm.cmd --filter @diffguard/cli start -- review --owner OWNER --repo REPO --pull-number PR_NUMBER --dry-run --output json
+```
+
+GitHub App auth is also supported when a token is not provided. Configure the app credentials in the environment or pass the equivalent flags:
+
+```powershell
+$env:GITHUB_APP_ID = "12345"
+$env:GITHUB_APP_INSTALLATION_ID = "98765"
+$env:GITHUB_APP_PRIVATE_KEY = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+pnpm.cmd --filter @diffguard/cli start -- review --owner OWNER --repo REPO --pull-number PR_NUMBER --dry-run
+```
+
+Remove `--dry-run` only when you want DiffGuard-AI to post validated GitHub review comments. The CLI exits non-zero for validation or execution failures and redacts token-like values from error output.
 
 ## GitHub Action Setup
 

@@ -101,6 +101,19 @@ describe("dashboard data", () => {
     expect(runs.map((run) => run.id)).toEqual(["rvw_1042", "rvw_1041", "rvw_1040", "rvw_1039"]);
   });
 
+  it("does not enable mock fallback from public client environment variables", async () => {
+    vi.stubEnv("DIFFGUARD_DEMO_MODE", undefined);
+    vi.stubEnv("NEXT_PUBLIC_DIFFGUARD_DEMO_MODE", "true");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("API offline");
+      })
+    );
+
+    await expect(getReviewRuns()).rejects.toThrow("Failed to load /dashboard/review-runs");
+  });
+
   it("surfaces API failures outside local demo mode", async () => {
     vi.stubGlobal(
       "fetch",

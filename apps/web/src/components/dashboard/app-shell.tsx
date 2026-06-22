@@ -89,8 +89,8 @@ export function AppShell({ children }: { children: ReactNode }): React.ReactElem
               Low-noise pull request review operations
             </div>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span className="rounded-md border bg-card px-2 py-1">Mock data</span>
-              <span className="rounded-md border bg-card px-2 py-1">API-ready UI</span>
+              <span className="rounded-md border bg-card px-2 py-1">Live API</span>
+              <span className="rounded-md border bg-card px-2 py-1">Server-side auth</span>
             </div>
           </div>
         </div>

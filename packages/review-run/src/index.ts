@@ -222,7 +222,7 @@ export async function finalizeReviewRun(
       ? new Set<string>()
       : await input.loadPostedFindingDedupeKeys(input.ref);
   const result = limitFindings(
-    filterPreviouslyPostedFindings(input.result, postedDedupeKeys),
+    filterPreviouslyPostedFindings(input.result, input.ref, postedDedupeKeys),
     input.maxFindings,
   );
   const summaryOptions = {
@@ -328,7 +328,7 @@ export async function postReviewFindings(input: {
       "Failed to list pull request review comments.",
     );
 
-    postedFindings.push(...matchPostedInlineComments(planned.inline, reviewComments));
+    postedFindings.push(...matchPostedInlineComments(input.ref, planned.inline, reviewComments));
   }
 
   if (planned.fallback.length > 0) {
@@ -349,7 +349,7 @@ export async function postReviewFindings(input: {
 
     postedFindings.push(
       ...planned.fallback.map((plannedFinding) => ({
-        dedupeKey: buildFindingDedupeKey(plannedFinding.finding),
+        dedupeKey: buildFindingDedupeKey(input.ref, plannedFinding.finding),
         githubCommentId: String(comment.id),
         line: plannedFinding.finding.line,
         path: plannedFinding.finding.filePath,
@@ -386,9 +386,7 @@ export function planReviewPosting(result: ReviewResult): {
       continue;
     }
 
-    if (mapped.kind === "unmapped") {
-      fallback.push({ finding });
-    }
+    fallback.push({ finding });
   }
 
   return { fallback, inline };
@@ -476,7 +474,7 @@ export async function storeReviewRunInDatabase(input: StoreReviewRunInput & {
 
       await database.finding.createMany({
         data: input.result.findings.map((finding) => {
-          const dedupeKey = buildFindingDedupeKey(finding);
+          const dedupeKey = buildFindingDedupeKey(input.result.context.ref, finding);
           const postedFinding = postedFindingByDedupeKey.get(dedupeKey);
 
           return {
@@ -611,6 +609,7 @@ export async function loadPostedFindingDedupeKeysFromDatabase(input: {
 
 export function filterPreviouslyPostedFindings(
   result: ReviewResult,
+  ref: PullRequestRef,
   postedDedupeKeys: Set<string>,
 ): ReviewResult {
   if (postedDedupeKeys.size === 0) {
@@ -619,9 +618,12 @@ export function filterPreviouslyPostedFindings(
 
   return {
     ...result,
-    findings: result.findings.filter(
-      (finding) => !postedDedupeKeys.has(buildFindingDedupeKey(finding)),
-    ),
+    findings: result.findings.filter((finding) => {
+      const dedupeKey = buildFindingDedupeKey(ref, finding);
+      const legacyDedupeKey = buildLegacyFindingDedupeKey(finding);
+
+      return !postedDedupeKeys.has(dedupeKey) && !postedDedupeKeys.has(legacyDedupeKey);
+    }),
   };
 }
 
@@ -636,10 +638,14 @@ export function limitFindings(result: ReviewResult, maxFindings: number | undefi
   };
 }
 
-export function buildFindingDedupeKey(finding: ReviewFinding): string {
-  return [finding.filePath, finding.line, finding.category, normalizeTitle(finding.title)].join(
-    ":",
-  );
+export function buildFindingDedupeKey(ref: PullRequestRef, finding: ReviewFinding): string {
+  return [
+    normalizeRepository(ref),
+    finding.filePath.trim(),
+    finding.line,
+    normalizeCategory(finding.category),
+    normalizeTitle(finding.title),
+  ].join(":");
 }
 
 async function createDefaultDatabaseClient(): Promise<PrismaClientLike> {
@@ -652,9 +658,6 @@ function mapFindingToReviewComment(
   files: PullRequestFile[],
   finding: ReviewFinding,
 ):
-  | {
-      kind: "deleted";
-    }
   | {
       kind: "mapped";
       line: number;
@@ -671,10 +674,6 @@ function mapFindingToReviewComment(
 
   if (file === undefined || file.patch === undefined) {
     return { kind: "unmapped" };
-  }
-
-  if (file.status === "removed" || file.status === "deleted") {
-    return { kind: "deleted" };
   }
 
   const diffLines = parseUnifiedDiff(file.patch).files.flatMap((parsedFile) =>
@@ -701,6 +700,7 @@ function mapFindingToReviewComment(
 }
 
 function matchPostedInlineComments(
+  ref: PullRequestRef,
   plannedComments: Array<{ comment: ReviewCommentInput; finding: ReviewFinding }>,
   reviewComments: Array<{
     body?: string;
@@ -734,7 +734,7 @@ function matchPostedInlineComments(
 
     matchedCommentIndexes.add(commentIndex);
     postedFindings.push({
-      dedupeKey: buildFindingDedupeKey(planned.finding),
+      dedupeKey: buildFindingDedupeKey(ref, planned.finding),
       githubCommentId: String(comment.id),
       line: planned.finding.line,
       path: planned.comment.path,
@@ -786,6 +786,27 @@ function normalizeTitle(title: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
+}
+
+function normalizeRepository(ref: PullRequestRef): string {
+  return `${normalizeRepositoryPart(ref.owner)}/${normalizeRepositoryPart(ref.repo)}#${ref.number}`;
+}
+
+function normalizeRepositoryPart(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function normalizeCategory(category: string): string {
+  return category.trim().toLowerCase();
+}
+
+function buildLegacyFindingDedupeKey(finding: ReviewFinding): string {
+  return [
+    finding.filePath.trim(),
+    finding.line,
+    normalizeCategory(finding.category),
+    normalizeTitle(finding.title),
+  ].join(":");
 }
 
 function calculateValidatorRejectionRate(result: ReviewResult): number | undefined {
