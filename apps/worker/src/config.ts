@@ -9,7 +9,8 @@ const WorkerEnvSchema = z.object({
   OPENAI_API_KEY: z.string().min(1).optional(),
   OPENAI_RESOLUTION_MODEL: z.string().min(1).optional(),
   REDIS_URL: z.string().url().default("redis://localhost:6379"),
-  REVIEW_QUEUE_NAME: z.string().min(1).default("diffguard-review-runs")
+  REVIEW_QUEUE_NAME: z.string().min(1).default("diffguard-review-runs"),
+  WORKER_HEALTH_PORT: z.coerce.number().int().positive().default(3002),
 });
 
 export type WorkerConfig = {
@@ -22,6 +23,7 @@ export type WorkerConfig = {
   redisUrl: string;
   queueName: string;
   staticChecksEnabled: boolean;
+  workerHealthPort: number;
 };
 
 export function createWorkerConfig(env: NodeJS.ProcessEnv): WorkerConfig {
@@ -36,7 +38,8 @@ export function createWorkerConfig(env: NodeJS.ProcessEnv): WorkerConfig {
     reviewPasses: parsed.DIFFGUARD_REVIEW_PASSES,
     redisUrl: parsed.REDIS_URL,
     queueName: parsed.REVIEW_QUEUE_NAME,
-    staticChecksEnabled: parseStaticChecksEnabled(parsed.DIFFGUARD_STATIC_CHECKS)
+    staticChecksEnabled: parseStaticChecksEnabled(parsed.DIFFGUARD_STATIC_CHECKS),
+    workerHealthPort: parsed.WORKER_HEALTH_PORT,
   };
 }
 

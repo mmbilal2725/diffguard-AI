@@ -84,6 +84,9 @@ importers:
       '@diffguard/reviewer':
         specifier: workspace:*
         version: link:../../packages/reviewer
+      '@diffguard/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       zod:
         specifier: ^3.24.1
         version: 3.25.76

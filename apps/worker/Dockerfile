@@ -19,10 +19,12 @@ RUN DATABASE_URL=postgresql://diffguard@localhost:5432/diffguard pnpm --filter @
 FROM base AS runner
 
 ENV NODE_ENV=production
+ENV REDIS_URL=redis://redis:6379
+ENV WORKER_HEALTH_PORT=3002
 
 COPY --from=deps /app /app
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD pnpm --filter @diffguard/worker exec node -e "const Redis = require('ioredis'); const redis = new Redis(process.env.REDIS_URL || 'redis://redis:6379'); redis.ping().then(() => redis.quit()).then(() => process.exit(0)).catch(() => process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:' + (process.env.WORKER_HEALTH_PORT || '3002') + '/ready').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
 
 CMD ["pnpm", "--filter", "@diffguard/worker", "exec", "tsx", "src/index.ts"]

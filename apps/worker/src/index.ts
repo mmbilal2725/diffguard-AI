@@ -6,14 +6,19 @@ import {
   markReviewRunFailedInDatabase,
   storeReviewRunInDatabase,
 } from "@diffguard/review-run";
-import { type ReviewJobData } from "@diffguard/shared";
+import { createJsonLogger, toErrorLogFields, type ReviewJobData } from "@diffguard/shared";
 
 import { createWorkerConfig } from "./config.js";
+import { startWorkerHealthServer, type WorkerHealthMetrics } from "./health-server.js";
 import { createWorkerLlmReviewer } from "./review-llm.js";
 import { createReviewProcessor } from "./review-processor.js";
 import { createPrismaResolutionStore } from "./resolution-store.js";
 
 const config = createWorkerConfig(process.env);
+const logger = createJsonLogger({
+  service: "diffguard-worker",
+  sink: (line) => process.stderr.write(`${line}\n`),
+});
 const redisUrl = new URL(config.redisUrl);
 const connection = {
   host: redisUrl.hostname,
@@ -21,6 +26,13 @@ const connection = {
   username: redisUrl.username || undefined,
   password: redisUrl.password || undefined,
   maxRetriesPerRequest: null
+};
+const metrics: WorkerHealthMetrics = {
+  jobFailureCount: 0,
+  jobSuccessCount: 0,
+  modelCostUsd: 0,
+  reviewDurationMs: 0,
+  validatorRejectionRate: 0,
 };
 const resolutionStore =
   process.env.DATABASE_URL === undefined
@@ -45,7 +57,7 @@ const llmSetup = createWorkerLlmReviewer({
 const llmProvider = llmSetup.provider;
 
 for (const warning of llmSetup.warnings) {
-  console.warn({ warning }, "DiffGuard LLM reviewer disabled");
+  logger.warn({ status: "disabled", warning }, "worker.llm_reviewer.disabled");
 }
 
 const worker = new Worker<ReviewJobData>(
@@ -57,6 +69,12 @@ const worker = new Worker<ReviewJobData>(
       ? {}
       : { findingValidator: llmSetup.findingValidator }),
     ...(llmSetup.llmReviewer === undefined ? {} : { llmReviewer: llmSetup.llmReviewer }),
+    logger,
+    onReviewCompleted: (summary) => {
+      metrics.modelCostUsd += summary.estimatedCostUsd;
+      metrics.reviewDurationMs = summary.durationMs ?? metrics.reviewDurationMs;
+      metrics.validatorRejectionRate = summary.validatorRejectionRate;
+    },
     ...reviewRunPersistence,
     resolutionStore,
     staticChecksEnabled: config.staticChecksEnabled,
@@ -75,11 +93,38 @@ const worker = new Worker<ReviewJobData>(
 );
 
 worker.on("completed", (job) => {
-  console.info({ jobId: job.id }, "Review job completed");
+  metrics.jobSuccessCount += 1;
+  logger.info(
+    {
+      jobId: job.id,
+      status: "completed",
+    },
+    "worker.queue_job.completed",
+  );
 });
 
 worker.on("failed", (job, error) => {
-  console.error({ jobId: job?.id, error: error.message }, "Review job failed");
+  metrics.jobFailureCount += 1;
+  logger.error(
+    {
+      jobId: job?.id,
+      ...toErrorLogFields(error),
+      status: "failed",
+    },
+    "worker.queue_job.failed",
+  );
 });
 
-console.info({ queueName: config.queueName }, "DiffGuard worker started");
+startWorkerHealthServer({
+  logger,
+  metrics: () => metrics,
+  port: config.workerHealthPort,
+  readiness: async () => {
+    const client = await worker.client;
+    await client.ping();
+
+    return worker.isRunning();
+  },
+});
+
+logger.info({ queueName: config.queueName, status: "started" }, "worker.started");

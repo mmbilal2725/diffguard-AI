@@ -28,6 +28,7 @@ import {
   type LlmProvider,
   type ReviewPromptTemplateId,
 } from "@diffguard/llm";
+import { createJsonLogger, redactLogValue, type Logger } from "@diffguard/shared";
 import { z } from "zod";
 
 const DEFAULT_MIN_CONFIDENCE = 0.7;
@@ -88,6 +89,7 @@ export type ReviewCommandDependencies = {
   createLlmProvider?: (config: { apiKey: string; model?: string }) => LlmProvider;
   env?: Record<string, string | undefined>;
   findingValidator?: FindingValidator;
+  logger?: Logger;
   loadPostedFindingDedupeKeys?: (input: PullRequestRef) => Promise<Set<string>>;
   runReviewPipeline?: (input: RunReviewPipelineInput) => Promise<ReviewResult>;
   storeReviewRun?: (input: StoreReviewRunInput) => Promise<void>;
@@ -131,6 +133,21 @@ export async function runReviewCommand(
   options: ReviewCommandOptions,
   dependencies: ReviewCommandDependencies = {},
 ): Promise<ReviewCommandResult> {
+  const logger =
+    dependencies.logger ??
+    createJsonLogger({
+      service: "diffguard-cli",
+      sink: (line) => process.stderr.write(`${line}\n`),
+    });
+  const startedAt = Date.now();
+  logger.info(
+    {
+      pullNumber: options.pullNumber,
+      repository: `${options.owner}/${options.repo}`,
+      status: "started",
+    },
+    "cli.review.started",
+  );
   const env = dependencies.env ?? process.env;
   const authToken = await resolveGitHubAuthToken(options, dependencies, env);
 
@@ -148,6 +165,7 @@ export async function runReviewCommand(
     confidenceThreshold: options.minConfidence,
     dryRun: options.dryRun,
     github: { client: githubClient },
+    ...(dependencies.runReviewPipeline === undefined ? { logger } : {}),
     owner: options.owner,
     pullNumber: options.pullNumber,
     repo: options.repo,
@@ -186,7 +204,7 @@ export async function runReviewCommand(
       : {}),
   });
 
-  return {
+  const commandResult = {
     output:
       options.output === "json"
         ? buildJsonOutput(finalized.result, {
@@ -201,6 +219,20 @@ export async function runReviewCommand(
     summary: finalized.summary,
     warnings: llmReviewerSetup.warnings,
   };
+
+  logger.info(
+    {
+      ...summarizeReviewResult(finalized.result),
+      durationMs: Date.now() - startedAt,
+      posted: finalized.posted,
+      pullNumber: options.pullNumber,
+      repository: `${options.owner}/${options.repo}`,
+      status: "completed",
+    },
+    "cli.review.completed",
+  );
+
+  return commandResult;
 }
 
 function areStaticChecksEnabled(env: Record<string, string | undefined>): boolean {
@@ -520,18 +552,50 @@ function appendWarningsToMarkdown(summary: string, warnings: string[]): string {
 export function formatCliError(error: unknown): string {
   const message = error instanceof Error ? error.message : "Unknown DiffGuard-AI CLI error.";
 
-  return redactSecretLikeValues(message);
+  return String(redactLogValue(message));
 }
 
-function redactSecretLikeValues(message: string): string {
-  return message
-    .replace(
-      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
-      "[redacted]",
-    )
-    .replace(/\b(?:sk|gh[pousr]|github_pat)[-_][A-Za-z0-9_-]{4,}\b/g, "[redacted]")
-    .replace(
-      /\b(private[_-]?key|github[_-]?token|token|secret|api[_-]?key|password|passwd|pwd)\s*[:=]\s*["']?[^"',\s]+/gi,
-      "$1=[redacted]",
-    );
+function summarizeReviewResult(result: ReviewResult): {
+  estimatedCostUsd: number;
+  findings: number;
+  modelName?: string;
+  tokenUsage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
+  validatorRejectionRate: number;
+} {
+  const modelSummary = result.modelCalls.reduce(
+    (summary, call) => ({
+      estimatedCostUsd: summary.estimatedCostUsd + call.costUsd,
+      modelName: summary.modelName ?? call.model,
+      tokenUsage: {
+        inputTokens: summary.tokenUsage.inputTokens + call.tokenUsage.inputTokens,
+        outputTokens: summary.tokenUsage.outputTokens + call.tokenUsage.outputTokens,
+        totalTokens: summary.tokenUsage.totalTokens + call.tokenUsage.totalTokens,
+      },
+    }),
+    {
+      estimatedCostUsd: 0,
+      modelName: undefined as string | undefined,
+      tokenUsage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+      },
+    },
+  );
+  const validatorRejections = result.rejectedFindings.filter(
+    (finding) => finding.reason === "validator_low_confidence" || finding.reason === "validator_rejected",
+  ).length;
+  const candidateCount = result.findings.length + result.rejectedFindings.length;
+
+  return {
+    estimatedCostUsd: modelSummary.estimatedCostUsd,
+    findings: result.findings.length,
+    ...(modelSummary.modelName === undefined ? {} : { modelName: modelSummary.modelName }),
+    tokenUsage: modelSummary.tokenUsage,
+    validatorRejectionRate: candidateCount === 0 ? 0 : validatorRejections / candidateCount,
+  };
 }

@@ -1,6 +1,12 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 
-import { REVIEW_QUEUE_JOB_NAME, type ReviewJobData } from "@diffguard/shared";
+import { createDatabaseClient } from "@diffguard/database";
+import {
+  createJsonLogger,
+  REVIEW_QUEUE_JOB_NAME,
+  type Logger,
+  type ReviewJobData,
+} from "@diffguard/shared";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { z } from "zod";
 
@@ -18,11 +24,24 @@ export type RateLimitOptions = {
 export type BuildApiServerOptions = {
   allowedOrigins?: string[];
   dashboardApiKey?: string;
+  databaseHealthCheck?: () => Promise<boolean>;
   dashboardStore?: DashboardStore;
+  logger?: Logger;
+  metricsProvider?: () => Promise<ProductionMetrics>;
   rateLimit?: RateLimitOptions;
+  redisHealthCheck?: () => Promise<boolean>;
   reviewQueue?: ReviewQueue;
   store?: WebhookStore;
   webhookSecret?: string;
+};
+
+export type ProductionMetrics = {
+  jobFailureCount: number;
+  jobSuccessCount: number;
+  modelCostUsd: number;
+  queueDepth: number;
+  reviewDurationMs: number;
+  validatorRejectionRate: number;
 };
 
 const ReviewRunStatusSchema = z.enum([
@@ -184,6 +203,7 @@ const DashboardEvalsResponseSchema = z
   .strict();
 
 export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInstance {
+  const logger = options.logger ?? createJsonLogger({ service: "diffguard-api" });
   const server = Fastify({
     logger: false
   });
@@ -191,9 +211,18 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
   let defaultDashboardStore: DashboardStore | undefined;
   let defaultStore: WebhookStore | undefined;
   const rateLimitState = new Map<string, { count: number; resetAt: number }>();
+  const requestIds = new WeakMap<FastifyRequest, string>();
+  const requestStarts = new WeakMap<FastifyRequest, number>();
 
   server.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
     done(null, body);
+  });
+
+  server.addHook("onRequest", async (request, reply) => {
+    const requestId = readHeader(request, "x-request-id") ?? randomUUID();
+    requestIds.set(request, requestId);
+    requestStarts.set(request, Date.now());
+    reply.header("x-request-id", requestId);
   });
 
   server.addHook("onRequest", async (request, reply) => {
@@ -232,8 +261,70 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
     }
   });
 
+  server.addHook("onResponse", async (request, reply) => {
+    const startedAt = requestStarts.get(request) ?? Date.now();
+    logger.info(
+      {
+        durationMs: Date.now() - startedAt,
+        method: request.method,
+        path: request.routeOptions.url ?? request.url,
+        requestId: readRequestId(requestIds, request),
+        status: reply.statusCode,
+      },
+      "api.request.completed",
+    );
+  });
+
   server.get("/health", async () => {
     return { status: "ok" };
+  });
+
+  server.get("/health/database", async (_request, reply) => {
+    const healthy = await runHealthCheck(() => checkDatabaseHealth(options));
+
+    return reply.code(healthy ? 200 : 503).send({
+      component: "database",
+      status: healthy ? "ok" : "unhealthy",
+    });
+  });
+
+  server.get("/health/redis", async (_request, reply) => {
+    const healthy = await runHealthCheck(() =>
+      checkRedisHealth(options, () => (defaultReviewQueue ??= createBullMqReviewQueue())),
+    );
+
+    return reply.code(healthy ? 200 : 503).send({
+      component: "redis",
+      status: healthy ? "ok" : "unhealthy",
+    });
+  });
+
+  server.get("/health/ready", async (_request, reply) => {
+    const [database, redis] = await Promise.all([
+      runHealthCheck(() => checkDatabaseHealth(options)),
+      runHealthCheck(() =>
+        checkRedisHealth(options, () => (defaultReviewQueue ??= createBullMqReviewQueue())),
+      ),
+    ]);
+    const healthy = database && redis;
+
+    return reply.code(healthy ? 200 : 503).send({
+      checks: {
+        database: database ? "ok" : "unhealthy",
+        redis: redis ? "ok" : "unhealthy",
+      },
+      status: healthy ? "ok" : "unhealthy",
+    });
+  });
+
+  server.get("/metrics", async () => {
+    return options.metricsProvider === undefined
+      ? readProductionMetrics({
+          getDashboardStore: async () =>
+            options.dashboardStore ?? (defaultDashboardStore ??= await createDefaultDashboardStore()),
+          getReviewQueue: () => options.reviewQueue ?? (defaultReviewQueue ??= createBullMqReviewQueue()),
+        })
+      : options.metricsProvider();
   });
 
   server.get("/dashboard/overview", async (request, reply) => {
@@ -317,8 +408,13 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
   });
 
   server.post("/webhooks/github", async (request, reply) => {
+    const webhookStartedAt = Date.now();
     const webhookSecret = options.webhookSecret ?? process.env.GITHUB_WEBHOOK_SECRET;
     if (webhookSecret === undefined || webhookSecret.trim() === "") {
+      logWebhook(logger, requestIds, request, {
+        durationMs: Date.now() - webhookStartedAt,
+        status: "failed",
+      });
       return reply.code(500).send({ error: "GitHub webhook secret is not configured." });
     }
 
@@ -331,17 +427,31 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
         signature,
       })
     ) {
+      logWebhook(logger, requestIds, request, {
+        durationMs: Date.now() - webhookStartedAt,
+        status: "rejected",
+      });
       return reply.code(401).send({ error: "Invalid GitHub webhook signature." });
     }
 
     const eventName = readHeader(request, "x-github-event");
     const deliveryId = readHeader(request, "x-github-delivery");
     if (eventName === undefined || deliveryId === undefined) {
+      logWebhook(logger, requestIds, request, {
+        durationMs: Date.now() - webhookStartedAt,
+        status: "rejected",
+        ...(deliveryId === undefined ? {} : { webhookDeliveryId: deliveryId }),
+      });
       return reply.code(400).send({ error: "Missing GitHub webhook headers." });
     }
 
     const payload = parseJsonPayload(payloadText);
     if (!payload.ok) {
+      logWebhook(logger, requestIds, request, {
+        durationMs: Date.now() - webhookStartedAt,
+        status: "rejected",
+        webhookDeliveryId: deliveryId,
+      });
       return reply.code(400).send({ error: "Invalid JSON webhook payload." });
     }
 
@@ -352,11 +462,21 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
       eventName,
     });
     if (delivery.duplicate) {
+      logWebhook(logger, requestIds, request, {
+        durationMs: Date.now() - webhookStartedAt,
+        status: "duplicate",
+        webhookDeliveryId: deliveryId,
+      });
       return reply.code(202).send({ status: "duplicate" });
     }
 
     const reviewRequest = toReviewWebhookRequest(eventName, payload.data);
     if (reviewRequest === null) {
+      logWebhook(logger, requestIds, request, {
+        durationMs: Date.now() - webhookStartedAt,
+        status: "ignored",
+        webhookDeliveryId: deliveryId,
+      });
       return reply.code(202).send({ status: "ignored" });
     }
 
@@ -397,6 +517,16 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
       removeOnFail: { age: 604800, count: 5000 },
     });
 
+    logWebhook(logger, requestIds, request, {
+      durationMs: Date.now() - webhookStartedAt,
+      jobId: `${deliveryId}:${reviewRun.reviewRunId}`,
+      pullNumber: reviewRequest.pullNumber,
+      repository: `${reviewRequest.owner}/${reviewRequest.repo}`,
+      reviewRunId: reviewRun.reviewRunId,
+      status: "queued",
+      webhookDeliveryId: deliveryId,
+    });
+
     return reply.code(202).send({ reviewRunId: reviewRun.reviewRunId, status: "queued" });
   });
 
@@ -410,6 +540,98 @@ function readRawPayload(request: FastifyRequest): string {
 function readHeader(request: FastifyRequest, name: string): string | undefined {
   const value = request.headers[name];
   return typeof value === "string" ? value : undefined;
+}
+
+function readRequestId(requestIds: WeakMap<FastifyRequest, string>, request: FastifyRequest): string {
+  return requestIds.get(request) ?? "unknown";
+}
+
+async function runHealthCheck(check: () => Promise<boolean>): Promise<boolean> {
+  try {
+    return await check();
+  } catch {
+    return false;
+  }
+}
+
+async function checkDatabaseHealth(options: BuildApiServerOptions): Promise<boolean> {
+  if (options.databaseHealthCheck !== undefined) {
+    return options.databaseHealthCheck();
+  }
+
+  if (process.env.DATABASE_URL === undefined || process.env.DATABASE_URL.trim() === "") {
+    return false;
+  }
+
+  const prisma = createDatabaseClient();
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+
+    return true;
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+async function checkRedisHealth(
+  options: BuildApiServerOptions,
+  getReviewQueue: () => ReviewQueue,
+): Promise<boolean> {
+  if (options.redisHealthCheck !== undefined) {
+    return options.redisHealthCheck();
+  }
+
+  const reviewQueue = getReviewQueue();
+  await reviewQueue.ping?.();
+
+  return true;
+}
+
+async function readProductionMetrics(input: {
+  getDashboardStore: () => Promise<DashboardStore>;
+  getReviewQueue: () => ReviewQueue;
+}): Promise<ProductionMetrics> {
+  const reviewQueue = input.getReviewQueue();
+  const [queueDepth, jobCounts, dashboardOverview] = await Promise.all([
+    reviewQueue.getDepth?.() ?? Promise.resolve(0),
+    reviewQueue.getJobCounts?.() ?? Promise.resolve({ failed: 0, succeeded: 0 }),
+    input
+      .getDashboardStore()
+      .then((store) => store.getOverview())
+      .catch(() => undefined),
+  ]);
+
+  return {
+    jobFailureCount: jobCounts.failed,
+    jobSuccessCount: jobCounts.succeeded,
+    modelCostUsd: dashboardOverview?.metrics.totalCostUsd ?? 0,
+    queueDepth,
+    reviewDurationMs: Math.round((dashboardOverview?.metrics.averageLatencySeconds ?? 0) * 1000),
+    validatorRejectionRate: dashboardOverview?.metrics.validatorRejectionRate ?? 0,
+  };
+}
+
+function logWebhook(
+  logger: Logger,
+  requestIds: WeakMap<FastifyRequest, string>,
+  request: FastifyRequest,
+  fields: {
+    durationMs: number;
+    jobId?: string;
+    pullNumber?: number;
+    repository?: string;
+    reviewRunId?: string;
+    status: string;
+    webhookDeliveryId?: string;
+  },
+): void {
+  logger.info(
+    {
+      requestId: readRequestId(requestIds, request),
+      ...fields,
+    },
+    "api.webhook.github",
+  );
 }
 
 function readClientId(request: FastifyRequest): string {

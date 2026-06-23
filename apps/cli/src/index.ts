@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { createJsonLogger, toErrorLogFields } from "@diffguard/shared";
+
 import { parseEvalCommandOptions, runEvalCommand } from "./eval-command.js";
 import { formatCliError, parseReviewCommandOptions, runReviewCommand } from "./review-command.js";
 
@@ -22,6 +24,16 @@ function normalizeCliArgv(argv: string[]): string[] {
 }
 
 main().catch((error: unknown) => {
+  createJsonLogger({
+    service: "diffguard-cli",
+    sink: (line) => process.stderr.write(`${line}\n`),
+  }).error(
+    {
+      ...toErrorLogFields(error),
+      status: "failed",
+    },
+    "cli.command.failed",
+  );
   process.stderr.write(`${formatCliError(error)}\n`);
   process.exitCode = 1;
 });

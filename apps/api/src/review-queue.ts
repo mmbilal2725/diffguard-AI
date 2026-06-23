@@ -17,13 +17,16 @@ export type ReviewQueue = {
       removeOnFail: { age: number; count: number };
     },
   ): Promise<unknown>;
+  getDepth?(): Promise<number>;
+  getJobCounts?(): Promise<{ failed: number; succeeded: number }>;
+  ping?(): Promise<void>;
 };
 
 export function createBullMqReviewQueue(env: NodeJS.ProcessEnv = process.env): ReviewQueue {
   const parsed = QueueEnvSchema.parse(env);
   const redisUrl = new URL(parsed.REDIS_URL);
 
-  return new Queue<ReviewJobData>(parsed.REVIEW_QUEUE_NAME, {
+  const queue = new Queue<ReviewJobData>(parsed.REVIEW_QUEUE_NAME, {
     connection: {
       host: redisUrl.hostname,
       password: redisUrl.password || undefined,
@@ -31,4 +34,21 @@ export function createBullMqReviewQueue(env: NodeJS.ProcessEnv = process.env): R
       username: redisUrl.username || undefined,
     },
   });
+
+  return {
+    add: (name, data, options) => queue.add(name, data, options),
+    getDepth: () => queue.count(),
+    getJobCounts: async () => {
+      const counts = await queue.getJobCounts("completed", "failed");
+
+      return {
+        failed: counts.failed,
+        succeeded: counts.completed,
+      };
+    },
+    ping: async () => {
+      const client = await queue.client;
+      await client.ping();
+    },
+  };
 }

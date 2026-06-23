@@ -79,6 +79,7 @@ services:
       OPENAI_RESOLUTION_MODEL: ${OPENAI_RESOLUTION_MODEL:-gpt-5.5}
       DIFFGUARD_REVIEW_PASSES: ${DIFFGUARD_REVIEW_PASSES:-logic-bugs,security-bugs,regression-test-gaps}
       DIFFGUARD_STATIC_CHECKS: ${DIFFGUARD_STATIC_CHECKS:-true}
+      WORKER_HEALTH_PORT: 3002
     depends_on:
       postgres:
         condition: service_healthy
@@ -87,8 +88,10 @@ services:
     healthcheck:
       test:
         [
-          "CMD-SHELL",
-          "pnpm --filter @diffguard/worker exec node -e \"const Redis = require('ioredis'); const redis = new Redis(process.env.REDIS_URL || 'redis://redis:6379'); redis.ping().then(() => redis.quit()).then(() => process.exit(0)).catch(() => process.exit(1))\""
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3002/ready').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
         ]
       interval: 30s
       timeout: 5s

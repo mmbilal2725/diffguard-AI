@@ -99,6 +99,7 @@ describe("createReviewProcessor", () => {
       owner: "acme",
       pullNumber: 42,
       repo: "widgets",
+      reviewRunId: "review_run_1",
     });
     expect(createGitHubClient).toHaveBeenCalledWith({ authToken: "ghs_installation_token" });
     expect(JSON.stringify(runReviewPipeline.mock.calls)).not.toContain("ghs_installation_token");
@@ -369,6 +370,7 @@ describe("createReviewProcessor", () => {
       owner: "acme",
       pullNumber: 42,
       repo: "widgets",
+      reviewRunId: "review_run_1",
     });
     expect(finalizeReviewRun).toHaveBeenCalledWith(
       expect.objectContaining({

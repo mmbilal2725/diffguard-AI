@@ -19,6 +19,7 @@
     "@diffguard/llm": "workspace:*",
     "@diffguard/review-run": "workspace:*",
     "@diffguard/reviewer": "workspace:*",
+    "@diffguard/shared": "workspace:*",
     "zod": "^3.24.1"
   },
   "devDependencies": {

@@ -8,6 +8,7 @@ describe("createWorkerConfig", () => {
 
     expect(config.redisUrl).toBe("redis://localhost:6379");
     expect(config.queueName).toBe("diffguard-review-runs");
+    expect(config.workerHealthPort).toBe(3002);
   });
 
   it("accepts explicit Redis and queue settings", () => {
@@ -18,7 +19,8 @@ describe("createWorkerConfig", () => {
       OPENAI_API_KEY: "sk-test",
       OPENAI_RESOLUTION_MODEL: "gpt-5.5-mini",
       REDIS_URL: "redis://redis.example.test:6379",
-      REVIEW_QUEUE_NAME: "custom-review-queue"
+      REVIEW_QUEUE_NAME: "custom-review-queue",
+      WORKER_HEALTH_PORT: "3012",
     });
 
     expect(config.openaiApiKey).toBe("sk-test");
@@ -28,5 +30,6 @@ describe("createWorkerConfig", () => {
     expect(config.staticChecksEnabled).toBe(false);
     expect(config.redisUrl).toBe("redis://redis.example.test:6379");
     expect(config.queueName).toBe("custom-review-queue");
+    expect(config.workerHealthPort).toBe(3012);
   });
 });

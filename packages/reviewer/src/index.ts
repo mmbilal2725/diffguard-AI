@@ -12,7 +12,9 @@ import {
   FindingSeveritySchema,
   ReviewFindingSchema,
   type FindingCategory,
+  type Logger,
   type ReviewFinding,
+  toErrorLogFields,
 } from "@diffguard/shared";
 import { z } from "zod";
 
@@ -199,11 +201,13 @@ export type FindingValidator = (input: FindingValidatorInput) => Promise<unknown
 export type RunReviewPipelineInput = {
   dryRun?: boolean;
   github: GitHubAuthContext;
+  logger?: Logger;
   llmReviewer?: LlmReviewer;
   findingValidator?: FindingValidator;
   owner: string;
   pullNumber: number;
   repo: string;
+  reviewRunId?: string;
   staticCheckRunner?: StaticCheckRunner;
   staticChecksEnabled?: boolean;
   confidenceThreshold?: number;
@@ -249,65 +253,97 @@ export function buildReviewContext(input: BuildReviewContextInput): ReviewContex
 export async function runReviewPipeline(input: RunReviewPipelineInput): Promise<ReviewResult> {
   const parsedInput = PipelineInputSchema.parse(input);
   const github = resolveGitHubClient(input.github);
+  const logger = input.logger;
   const timings: StageTiming[] = [];
-  const ref: PullRequestRef = {
+  const ref: PullRequestRef & { reviewRunId?: string } = {
     number: parsedInput.pullNumber,
     owner: parsedInput.owner,
     repo: parsedInput.repo,
+    ...(input.reviewRunId === undefined ? {} : { reviewRunId: input.reviewRunId }),
   };
 
-  const pullRequest = await recordStage(timings, "fetch_pull_request", async () =>
-    unwrapGitHubResult(await github.getPullRequestMetadata(ref), "Failed to fetch pull request."),
+  const pullRequest = await recordStage(
+    timings,
+    "fetch_pull_request",
+    async () =>
+      unwrapGitHubResult(await github.getPullRequestMetadata(ref), "Failed to fetch pull request."),
+    { logger, ref },
   );
 
-  const files = await recordStage(timings, "list_changed_files", async () =>
-    unwrapGitHubResult(
-      await github.listPullRequestFiles(ref),
-      "Failed to list pull request files.",
-    ),
+  const files = await recordStage(
+    timings,
+    "list_changed_files",
+    async () =>
+      unwrapGitHubResult(
+        await github.listPullRequestFiles(ref),
+        "Failed to list pull request files.",
+      ),
+    { logger, ref },
   );
 
-  const diff = await recordStage(timings, "fetch_pull_request_diff", async () =>
-    unwrapGitHubResult(await github.fetchPullRequestDiff(ref), "Failed to fetch pull request diff."),
+  const diff = await recordStage(
+    timings,
+    "fetch_pull_request_diff",
+    async () =>
+      unwrapGitHubResult(await github.fetchPullRequestDiff(ref), "Failed to fetch pull request diff."),
+    { logger, ref },
   );
 
-  const rules = await recordStage(timings, "read_rules", async () => {
-    const result = await github.readDiffGuardRules({
-      owner: parsedInput.owner,
-      ref: pullRequest.headSha,
-      repo: parsedInput.repo,
-    });
+  const rules = await recordStage(
+    timings,
+    "read_rules",
+    async () => {
+      const result = await github.readDiffGuardRules({
+        owner: parsedInput.owner,
+        ref: pullRequest.headSha,
+        repo: parsedInput.repo,
+      });
 
-    if (!result.ok && result.error.kind === "not_found") {
-      return null;
-    }
+      if (!result.ok && result.error.kind === "not_found") {
+        return null;
+      }
 
-    return unwrapGitHubResult(result, "Failed to read DiffGuard rules.");
-  });
-
-  const context = await recordStage(timings, "build_context", async () =>
-    buildReviewContext({
-      dryRun: parsedInput.dryRun,
-      diff,
-      files,
-      owner: parsedInput.owner,
-      pullNumber: parsedInput.pullNumber,
-      pullRequest,
-      repo: parsedInput.repo,
-      rules,
-    }),
+      return unwrapGitHubResult(result, "Failed to read DiffGuard rules.");
+    },
+    { logger, ref },
   );
 
-  const staticCandidates = await recordStage(timings, "static_checks", async () => {
-    if (!parsedInput.staticChecksEnabled) {
-      return [];
-    }
+  const context = await recordStage(
+    timings,
+    "build_context",
+    async () =>
+      buildReviewContext({
+        dryRun: parsedInput.dryRun,
+        diff,
+        files,
+        owner: parsedInput.owner,
+        pullNumber: parsedInput.pullNumber,
+        pullRequest,
+        repo: parsedInput.repo,
+        rules,
+      }),
+    { logger, ref },
+  );
 
-    return (input.staticCheckRunner ?? runDefaultStaticChecks)(context);
-  });
+  const staticCandidates = await recordStage(
+    timings,
+    "static_checks",
+    async () => {
+      if (!parsedInput.staticChecksEnabled) {
+        return [];
+      }
 
-  const llmReview = await recordStage(timings, "llm_review", async () =>
-    normalizeLlmReviewerResult(await (input.llmReviewer ?? runPlaceholderLlmReviewer)(context)),
+      return (input.staticCheckRunner ?? runDefaultStaticChecks)(context);
+    },
+    { logger, ref },
+  );
+
+  const llmReview = await recordStage(
+    timings,
+    "llm_review",
+    async () =>
+      normalizeLlmReviewerResult(await (input.llmReviewer ?? runPlaceholderLlmReviewer)(context)),
+    { logger, ref },
   );
 
   const { findings: validatedFindings, rejectedFindings: validationRejects } = await recordStage(
@@ -328,21 +364,24 @@ export async function runReviewPipeline(input: RunReviewPipelineInput): Promise<
         rejectedFindings: [...parsed.rejectedFindings, ...validated.rejectedFindings],
       };
     },
+    { logger, ref },
   );
 
   const { findings: dedupedFindings, rejectedFindings: duplicateRejects } = await recordStage(
     timings,
     "dedupe_findings",
     async () => dedupeFindings(validatedFindings),
+    { logger, ref },
   );
 
   const { findings, rejectedFindings: confidenceRejects } = await recordStage(
     timings,
     "filter_findings",
     async () => filterPostableFindings(dedupedFindings, parsedInput.confidenceThreshold),
+    { logger, ref },
   );
 
-  return {
+  const result = {
     context,
     dryRun: parsedInput.dryRun,
     findings,
@@ -351,6 +390,20 @@ export async function runReviewPipeline(input: RunReviewPipelineInput): Promise<
     rejectedFindings: [...validationRejects, ...duplicateRejects, ...confidenceRejects],
     timings,
   };
+
+  logger?.info(
+    {
+      ...buildReviewLogFields(ref),
+      ...summarizeModelCalls(result.modelCalls),
+      durationMs: result.timings.reduce((total, timing) => total + timing.durationMs, 0),
+      findings: result.findings.length,
+      status: "completed",
+      validatorRejectionRate: calculateValidatorRejectionRate(result),
+    },
+    "review_pipeline.completed",
+  );
+
+  return result;
 }
 
 export async function runPlaceholderStaticChecks(): Promise<unknown[]> {
@@ -592,21 +645,114 @@ async function recordStage<T>(
   timings: StageTiming[],
   stage: PipelineStage,
   operation: () => Promise<T>,
+  observability?: {
+    logger?: Logger;
+    ref: PullRequestRef;
+  },
 ): Promise<T> {
   const startedAtMs = Date.now();
   const startedAt = new Date(startedAtMs).toISOString();
 
   try {
-    return await operation();
-  } finally {
+    const result = await operation();
     const completedAtMs = Date.now();
+    const durationMs = completedAtMs - startedAtMs;
     timings.push({
       completedAt: new Date(completedAtMs).toISOString(),
-      durationMs: completedAtMs - startedAtMs,
+      durationMs,
       stage,
       startedAt,
     });
+    observability?.logger?.info(
+      {
+        ...buildReviewLogFields(observability.ref),
+        durationMs,
+        stage,
+        status: "completed",
+      },
+      "review_pipeline.stage.completed",
+    );
+
+    return result;
+  } catch (error) {
+    const completedAtMs = Date.now();
+    const durationMs = completedAtMs - startedAtMs;
+    timings.push({
+      completedAt: new Date(completedAtMs).toISOString(),
+      durationMs,
+      stage,
+      startedAt,
+    });
+    observability?.logger?.error(
+      {
+        ...buildReviewLogFields(observability.ref),
+        ...toErrorLogFields(error),
+        durationMs,
+        stage,
+        status: "failed",
+      },
+      "review_pipeline.stage.failed",
+    );
+    throw error;
   }
+}
+
+function buildReviewLogFields(ref: PullRequestRef & { reviewRunId?: string }): {
+  pullNumber: number;
+  repository: string;
+  reviewRunId?: string;
+} {
+  return {
+    pullNumber: ref.number,
+    repository: `${ref.owner}/${ref.repo}`,
+    ...(ref.reviewRunId === undefined ? {} : { reviewRunId: ref.reviewRunId }),
+  };
+}
+
+function summarizeModelCalls(modelCalls: ModelCallTelemetry[]): {
+  estimatedCostUsd: number;
+  modelName?: string;
+  tokenUsage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
+} {
+  const summary = modelCalls.reduce(
+    (summary, call) => ({
+      estimatedCostUsd: summary.estimatedCostUsd + call.costUsd,
+      modelName: summary.modelName ?? call.model,
+      tokenUsage: {
+        inputTokens: summary.tokenUsage.inputTokens + call.tokenUsage.inputTokens,
+        outputTokens: summary.tokenUsage.outputTokens + call.tokenUsage.outputTokens,
+        totalTokens: summary.tokenUsage.totalTokens + call.tokenUsage.totalTokens,
+      },
+    }),
+    {
+      estimatedCostUsd: 0,
+      modelName: undefined as string | undefined,
+      tokenUsage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+      },
+    },
+  );
+
+  return {
+    estimatedCostUsd: summary.estimatedCostUsd,
+    ...(summary.modelName === undefined ? {} : { modelName: summary.modelName }),
+    tokenUsage: summary.tokenUsage,
+  };
+}
+
+function calculateValidatorRejectionRate(result: ReviewResult): number {
+  const validatorRejections = result.rejectedFindings.filter(
+    (finding) => finding.reason === "validator_low_confidence" || finding.reason === "validator_rejected",
+  ).length;
+  const totalCandidates = result.findings.length + result.rejectedFindings.length;
+
+  return totalCandidates === 0 ? 0 : validatorRejections / totalCandidates;
 }
 
 function unwrapGitHubResult<T>(result: GitHubResult<T>, message: string): T {

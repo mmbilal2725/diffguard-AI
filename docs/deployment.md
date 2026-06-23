@@ -100,5 +100,27 @@ docker compose -f docker-compose.prod.yml --env-file .env.production run --rm ap
 docker compose -f docker-compose.prod.yml --env-file .env.production up -d
 ```
 
-The API exposes `/health`. The worker healthcheck verifies Redis connectivity,
-and the web healthcheck verifies the dashboard server responds.
+## Observability
+
+Services write structured JSON logs to stderr/stdout. Log entries include
+request ids, webhook delivery ids, BullMQ job ids, repository, PR number,
+review run id, status, duration, model name, token usage, estimated cost, and
+validator rejection rate where those fields are available. Secret-like values,
+raw authorization headers, private keys, API keys, installation tokens, and
+prompt contents are redacted before logging.
+
+Health and metrics endpoints:
+
+- API health: `GET /health`
+- API database connectivity: `GET /health/database`
+- API Redis connectivity: `GET /health/redis`
+- API readiness: `GET /health/ready`
+- API metrics: `GET /metrics`
+- Worker health: `GET /health` on `WORKER_HEALTH_PORT` inside the worker
+  container, default `3002`
+- Worker readiness: `GET /ready` on `WORKER_HEALTH_PORT`
+- Worker metrics: `GET /metrics` on `WORKER_HEALTH_PORT`
+
+The Docker healthchecks use the API `/health`, worker `/ready`, and web root
+endpoint. Keep these endpoints behind your private network or ingress controls;
+they expose operational counters but no secrets.

@@ -23,6 +23,97 @@ describe("buildApiServer", () => {
     await server.close();
   });
 
+  it("checks database and Redis health using configured probes", async () => {
+    const server = buildApiServer({
+      databaseHealthCheck: async () => true,
+      redisHealthCheck: async () => true,
+    });
+
+    const database = await server.inject({ method: "GET", url: "/health/database" });
+    const redis = await server.inject({ method: "GET", url: "/health/redis" });
+    const ready = await server.inject({ method: "GET", url: "/health/ready" });
+
+    expect(database.statusCode).toBe(200);
+    expect(database.json()).toEqual({ component: "database", status: "ok" });
+    expect(redis.statusCode).toBe(200);
+    expect(redis.json()).toEqual({ component: "redis", status: "ok" });
+    expect(ready.statusCode).toBe(200);
+    expect(ready.json()).toEqual({ checks: { database: "ok", redis: "ok" }, status: "ok" });
+
+    await server.close();
+  });
+
+  it("returns unhealthy when a readiness dependency fails", async () => {
+    const server = buildApiServer({
+      databaseHealthCheck: async () => false,
+      redisHealthCheck: async () => true,
+    });
+
+    const response = await server.inject({ method: "GET", url: "/health/ready" });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      checks: { database: "unhealthy", redis: "ok" },
+      status: "unhealthy",
+    });
+
+    await server.close();
+  });
+
+  it("serves production metrics from the configured metrics provider", async () => {
+    const server = buildApiServer({
+      metricsProvider: async () => ({
+        jobFailureCount: 1,
+        jobSuccessCount: 7,
+        modelCostUsd: 0.048,
+        queueDepth: 3,
+        reviewDurationMs: 1250,
+        validatorRejectionRate: 0.4,
+      }),
+    });
+
+    const response = await server.inject({ method: "GET", url: "/metrics" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      jobFailureCount: 1,
+      jobSuccessCount: 7,
+      modelCostUsd: 0.048,
+      queueDepth: 3,
+      reviewDurationMs: 1250,
+      validatorRejectionRate: 0.4,
+    });
+
+    await server.close();
+  });
+
+  it("sets and logs request ids without raw authorization headers", async () => {
+    const entries: Array<Record<string, unknown>> = [];
+    const server = buildApiServer({
+      logger: {
+        debug: vi.fn(),
+        error: vi.fn(),
+        info: (fields) => entries.push(fields),
+        warn: vi.fn(),
+      },
+    });
+
+    const response = await server.inject({
+      headers: {
+        authorization: "Bearer ghs_installation_token_12345",
+        "x-request-id": "req-test",
+      },
+      method: "GET",
+      url: "/health",
+    });
+
+    expect(response.headers["x-request-id"]).toBe("req-test");
+    expect(JSON.stringify(entries)).toContain("req-test");
+    expect(JSON.stringify(entries)).not.toContain("ghs_installation_token");
+
+    await server.close();
+  });
+
   it("sets CORS headers for allowed origins", async () => {
     const server = buildApiServer({ allowedOrigins: ["https://app.diffguard.ai"] });
 

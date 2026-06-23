@@ -24,7 +24,12 @@ import {
   type StaticCheckRunner,
   type StoredPostedFinding,
 } from "@diffguard/reviewer";
-import { ReviewJobDataSchema, type ReviewJobData } from "@diffguard/shared";
+import {
+  ReviewJobDataSchema,
+  toErrorLogFields,
+  type Logger,
+  type ReviewJobData,
+} from "@diffguard/shared";
 
 type InstallationTokenFactory = (input: {
   appId: string;
@@ -39,6 +44,7 @@ type ReviewRunFailureMarker = (input: {
   error: unknown;
   reviewRunId: string;
 }) => Promise<void>;
+type ReviewCompletionSummary = ReturnType<typeof summarizeReviewResult> & { durationMs: number };
 
 export type ResolutionStore = {
   listPostedFindings(input: {
@@ -55,6 +61,7 @@ export type ResolutionStore = {
 
 export type ReviewJobLike = {
   data: ReviewJobData;
+  id?: string;
   log?: (message: string) => unknown;
 };
 
@@ -66,11 +73,13 @@ export type CreateReviewProcessorOptions = {
   findingValidator?: FindingValidator;
   finalizeReviewRun?: ReviewRunFinalizer;
   loadPostedFindingDedupeKeys?: (input: PullRequestRef) => Promise<Set<string>>;
+  logger?: Logger;
   llmReviewer?: LlmReviewer;
   markReviewRunFailed?: ReviewRunFailureMarker;
   maxFindings?: number;
   minConfidence?: number;
   model?: string;
+  onReviewCompleted?: (summary: ReviewCompletionSummary) => void;
   privateKey: string | undefined;
   resolutionStore?: ResolutionStore;
   resolutionValidator?: ResolutionValidator;
@@ -83,6 +92,22 @@ export type CreateReviewProcessorOptions = {
 export function createReviewProcessor(options: CreateReviewProcessorOptions) {
   return async (job: ReviewJobLike): Promise<{ findings: number; reviewRunId: string }> => {
     const data = ReviewJobDataSchema.parse(job.data);
+    const startedAt = Date.now();
+    const baseLogFields = {
+      jobId: job.id,
+      pullNumber: data.pullNumber,
+      repository: `${data.owner}/${data.repo}`,
+      reviewRunId: data.reviewRunId,
+      webhookDeliveryId: data.deliveryId,
+    };
+
+    options.logger?.info(
+      {
+        ...baseLogFields,
+        status: "started",
+      },
+      "worker.review_job.started",
+    );
 
     try {
       if (options.appId === undefined || options.privateKey === undefined) {
@@ -113,6 +138,8 @@ export function createReviewProcessor(options: CreateReviewProcessorOptions) {
         owner: data.owner,
         pullNumber: data.pullNumber,
         repo: data.repo,
+        reviewRunId: data.reviewRunId,
+        ...(options.logger === undefined ? {} : { logger: options.logger }),
         ...(options.staticCheckRunner === undefined
           ? {}
           : { staticCheckRunner: options.staticCheckRunner }),
@@ -171,18 +198,85 @@ export function createReviewProcessor(options: CreateReviewProcessorOptions) {
       }
 
       await job.log?.(`Completed review run ${data.reviewRunId}`);
+      const reviewSummary = {
+        ...summarizeReviewResult(finalized.result),
+        durationMs: Date.now() - startedAt,
+      };
+      options.onReviewCompleted?.(reviewSummary);
+      options.logger?.info(
+        {
+          ...baseLogFields,
+          ...reviewSummary,
+          status: "completed",
+        },
+        "worker.review_job.completed",
+      );
 
       return {
         findings: finalized.result.findings.length,
         reviewRunId: data.reviewRunId,
       };
     } catch (error) {
+      options.logger?.error(
+        {
+          ...baseLogFields,
+          ...toErrorLogFields(error),
+          durationMs: Date.now() - startedAt,
+          status: "failed",
+        },
+        "worker.review_job.failed",
+      );
       await options.markReviewRunFailed?.({
         error,
         reviewRunId: data.reviewRunId,
       });
       throw error;
     }
+  };
+}
+
+function summarizeReviewResult(result: ReviewResult): {
+  estimatedCostUsd: number;
+  findings: number;
+  modelName?: string;
+  tokenUsage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
+  validatorRejectionRate: number;
+} {
+  const modelSummary = result.modelCalls.reduce(
+    (summary, call) => ({
+      estimatedCostUsd: summary.estimatedCostUsd + call.costUsd,
+      modelName: summary.modelName ?? call.model,
+      tokenUsage: {
+        inputTokens: summary.tokenUsage.inputTokens + call.tokenUsage.inputTokens,
+        outputTokens: summary.tokenUsage.outputTokens + call.tokenUsage.outputTokens,
+        totalTokens: summary.tokenUsage.totalTokens + call.tokenUsage.totalTokens,
+      },
+    }),
+    {
+      estimatedCostUsd: 0,
+      modelName: undefined as string | undefined,
+      tokenUsage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+      },
+    },
+  );
+  const validatorRejections = result.rejectedFindings.filter(
+    (finding) => finding.reason === "validator_low_confidence" || finding.reason === "validator_rejected",
+  ).length;
+  const candidateCount = result.findings.length + result.rejectedFindings.length;
+
+  return {
+    estimatedCostUsd: modelSummary.estimatedCostUsd,
+    findings: result.findings.length,
+    ...(modelSummary.modelName === undefined ? {} : { modelName: modelSummary.modelName }),
+    tokenUsage: modelSummary.tokenUsage,
+    validatorRejectionRate: candidateCount === 0 ? 0 : validatorRejections / candidateCount,
   };
 }
 
