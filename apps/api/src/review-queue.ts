@@ -42,13 +42,12 @@ export function createBullMqReviewQueue(env: NodeJS.ProcessEnv = process.env): R
       const counts = await queue.getJobCounts("completed", "failed");
 
       return {
-        failed: counts.failed,
-        succeeded: counts.completed,
+        failed: counts.failed ?? 0,
+        succeeded: counts.completed ?? 0,
       };
     },
     ping: async () => {
-      const client = await queue.client;
-      await client.ping();
+      await queue.count();
     },
   };
 }

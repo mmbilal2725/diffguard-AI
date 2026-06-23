@@ -32,4 +32,23 @@ describe("createWorkerConfig", () => {
     expect(config.queueName).toBe("custom-review-queue");
     expect(config.workerHealthPort).toBe(3012);
   });
+
+  it("fails fast in production when GitHub App or OpenAI secrets are missing", () => {
+    expect(() =>
+      createWorkerConfig({
+        GITHUB_APP_ID: "12345",
+        GITHUB_APP_PRIVATE_KEY: "private-key",
+        NODE_ENV: "production",
+        REDIS_URL: "redis://redis.example.test:6379",
+      }),
+    ).toThrow(/OPENAI_API_KEY/);
+
+    expect(() =>
+      createWorkerConfig({
+        NODE_ENV: "production",
+        OPENAI_API_KEY: "sk-test",
+        REDIS_URL: "redis://redis.example.test:6379",
+      }),
+    ).toThrow(/GITHUB_APP_ID/);
+  });
 });

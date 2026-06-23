@@ -23,6 +23,24 @@ describe("buildApiServer", () => {
     await server.close();
   });
 
+  it("adds security headers to API responses", async () => {
+    const server = buildApiServer();
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/health",
+    });
+
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(response.headers["x-frame-options"]).toBe("DENY");
+    expect(response.headers["referrer-policy"]).toBe("no-referrer");
+    expect(response.headers["permissions-policy"]).toContain("camera=()");
+    expect(response.headers["cross-origin-resource-policy"]).toBe("same-site");
+    expect(response.headers["cache-control"]).toBe("no-store");
+
+    await server.close();
+  });
+
   it("checks database and Redis health using configured probes", async () => {
     const server = buildApiServer({
       databaseHealthCheck: async () => true,
@@ -344,6 +362,19 @@ describe("buildApiServer", () => {
     await server.close();
   });
 
+  it("allows dashboard API without a key only in demo mode", async () => {
+    const server = buildApiServer({ dashboardStore: createDashboardStore(), demoMode: true });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/dashboard/overview",
+    });
+
+    expect(response.statusCode).toBe(200);
+
+    await server.close();
+  });
+
   it("rejects dashboard API requests with missing or invalid credentials", async () => {
     const server = buildApiServer({
       dashboardApiKey: DASHBOARD_API_KEY,
@@ -474,6 +505,73 @@ describe("buildApiServer", () => {
     expect(JSON.stringify(response.json())).not.toContain(WEBHOOK_SECRET);
     expect(dependencies.store.recordDelivery).not.toHaveBeenCalled();
     expect(dependencies.reviewQueue.add).not.toHaveBeenCalled();
+
+    await server.close();
+  });
+
+  it("rejects oversized request bodies before webhook processing", async () => {
+    const dependencies = createWebhookDependencies();
+    const server = buildApiServer({
+      bodyLimitBytes: 32,
+      reviewQueue: dependencies.reviewQueue,
+      store: dependencies.store,
+      webhookSecret: WEBHOOK_SECRET,
+    });
+    const payload = JSON.stringify({ value: "x".repeat(256) });
+
+    const response = await server.inject({
+      headers: signedHeaders({
+        deliveryId: "delivery-oversized",
+        eventName: "ping",
+        payload,
+      }),
+      method: "POST",
+      payload,
+      url: "/webhooks/github",
+    });
+
+    expect(response.statusCode).toBe(413);
+    expect(dependencies.store.recordDelivery).not.toHaveBeenCalled();
+    expect(dependencies.reviewQueue.add).not.toHaveBeenCalled();
+
+    await server.close();
+  });
+
+  it("rate limits public webhook requests", async () => {
+    const dependencies = createWebhookDependencies();
+    const server = buildApiServer({
+      rateLimit: { maxRequests: 1, windowMs: 60_000 },
+      reviewQueue: dependencies.reviewQueue,
+      store: dependencies.store,
+      webhookSecret: WEBHOOK_SECRET,
+    });
+    const firstPayload = JSON.stringify({ zen: "first" });
+    const secondPayload = JSON.stringify({ zen: "second" });
+
+    const first = await server.inject({
+      headers: signedHeaders({
+        deliveryId: "delivery-rate-1",
+        eventName: "ping",
+        payload: firstPayload,
+      }),
+      method: "POST",
+      payload: firstPayload,
+      url: "/webhooks/github",
+    });
+    const second = await server.inject({
+      headers: signedHeaders({
+        deliveryId: "delivery-rate-2",
+        eventName: "ping",
+        payload: secondPayload,
+      }),
+      method: "POST",
+      payload: secondPayload,
+      url: "/webhooks/github",
+    });
+
+    expect(first.statusCode).toBe(202);
+    expect(second.statusCode).toBe(429);
+    expect(second.json()).toEqual({ error: "Rate limit exceeded." });
 
     await server.close();
   });

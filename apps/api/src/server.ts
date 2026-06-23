@@ -23,9 +23,11 @@ export type RateLimitOptions = {
 
 export type BuildApiServerOptions = {
   allowedOrigins?: string[];
+  bodyLimitBytes?: number;
   dashboardApiKey?: string;
   databaseHealthCheck?: () => Promise<boolean>;
   dashboardStore?: DashboardStore;
+  demoMode?: boolean;
   logger?: Logger;
   metricsProvider?: () => Promise<ProductionMetrics>;
   rateLimit?: RateLimitOptions;
@@ -205,6 +207,7 @@ const DashboardEvalsResponseSchema = z
 export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInstance {
   const logger = options.logger ?? createJsonLogger({ service: "diffguard-api" });
   const server = Fastify({
+    bodyLimit: options.bodyLimitBytes ?? readPositiveInteger(process.env.DIFFGUARD_BODY_LIMIT_BYTES, 1_048_576),
     logger: false
   });
   let defaultReviewQueue: ReviewQueue | undefined;
@@ -223,6 +226,7 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
     requestIds.set(request, requestId);
     requestStarts.set(request, Date.now());
     reply.header("x-request-id", requestId);
+    setSecurityHeaders(reply);
   });
 
   server.addHook("onRequest", async (request, reply) => {
@@ -328,7 +332,7 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
   });
 
   server.get("/dashboard/overview", async (request, reply) => {
-    const authorized = requireDashboardApiKey(request, reply, readDashboardApiKey(options));
+    const authorized = requireDashboardApiKey(request, reply, readDashboardApiKey(options), readDemoMode(options));
     if (authorized !== true) {
       return authorized;
     }
@@ -339,7 +343,7 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
   });
 
   server.get("/dashboard/review-runs", async (request, reply) => {
-    const authorized = requireDashboardApiKey(request, reply, readDashboardApiKey(options));
+    const authorized = requireDashboardApiKey(request, reply, readDashboardApiKey(options), readDemoMode(options));
     if (authorized !== true) {
       return authorized;
     }
@@ -352,7 +356,7 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
   });
 
   server.get<{ Params: { id: string } }>("/dashboard/review-runs/:id", async (request, reply) => {
-    const authorized = requireDashboardApiKey(request, reply, readDashboardApiKey(options));
+    const authorized = requireDashboardApiKey(request, reply, readDashboardApiKey(options), readDemoMode(options));
     if (authorized !== true) {
       return authorized;
     }
@@ -369,7 +373,7 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
   });
 
   server.get("/dashboard/repositories", async (request, reply) => {
-    const authorized = requireDashboardApiKey(request, reply, readDashboardApiKey(options));
+    const authorized = requireDashboardApiKey(request, reply, readDashboardApiKey(options), readDemoMode(options));
     if (authorized !== true) {
       return authorized;
     }
@@ -382,7 +386,7 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
   });
 
   server.get("/dashboard/findings", async (request, reply) => {
-    const authorized = requireDashboardApiKey(request, reply, readDashboardApiKey(options));
+    const authorized = requireDashboardApiKey(request, reply, readDashboardApiKey(options), readDemoMode(options));
     if (authorized !== true) {
       return authorized;
     }
@@ -395,7 +399,7 @@ export function buildApiServer(options: BuildApiServerOptions = {}): FastifyInst
   });
 
   server.get("/dashboard/evals", async (request, reply) => {
-    const authorized = requireDashboardApiKey(request, reply, readDashboardApiKey(options));
+    const authorized = requireDashboardApiKey(request, reply, readDashboardApiKey(options), readDemoMode(options));
     if (authorized !== true) {
       return authorized;
     }
@@ -540,6 +544,16 @@ function readRawPayload(request: FastifyRequest): string {
 function readHeader(request: FastifyRequest, name: string): string | undefined {
   const value = request.headers[name];
   return typeof value === "string" ? value : undefined;
+}
+
+function setSecurityHeaders(reply: FastifyReply): void {
+  reply.header("cache-control", "no-store");
+  reply.header("content-security-policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
+  reply.header("cross-origin-resource-policy", "same-site");
+  reply.header("permissions-policy", "camera=(), microphone=(), geolocation=()");
+  reply.header("referrer-policy", "no-referrer");
+  reply.header("x-content-type-options", "nosniff");
+  reply.header("x-frame-options", "DENY");
 }
 
 function readRequestId(requestIds: WeakMap<FastifyRequest, string>, request: FastifyRequest): string {
@@ -766,8 +780,13 @@ function readDashboardApiKey(options: BuildApiServerOptions): string | undefined
 function requireDashboardApiKey(
   request: FastifyRequest,
   reply: FastifyReply,
-  configuredApiKey: string | undefined
+  configuredApiKey: string | undefined,
+  demoMode: boolean,
 ): true | FastifyReply {
+  if (demoMode) {
+    return true;
+  }
+
   if (configuredApiKey === undefined || configuredApiKey.trim() === "") {
     return reply.code(500).send({ error: "Dashboard API key is not configured." });
   }
@@ -778,6 +797,16 @@ function requireDashboardApiKey(
   }
 
   return true;
+}
+
+function readDemoMode(options: BuildApiServerOptions): boolean {
+  if (options?.demoMode !== undefined) {
+    return options.demoMode;
+  }
+
+  return ["1", "true", "yes", "on"].includes(
+    (process.env.DIFFGUARD_DEMO_MODE ?? "false").trim().toLowerCase(),
+  );
 }
 
 function readDashboardCredential(request: FastifyRequest): string | undefined {

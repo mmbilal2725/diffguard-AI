@@ -1,4 +1,5 @@
 import { Worker } from "bullmq";
+import { Redis } from "ioredis";
 import { createDatabaseClient } from "@diffguard/database";
 import { validateFindingResolutionWithLlm } from "@diffguard/llm";
 import {
@@ -27,6 +28,9 @@ const connection = {
   password: redisUrl.password || undefined,
   maxRetriesPerRequest: null
 };
+const healthRedis = new Redis(config.redisUrl, {
+  maxRetriesPerRequest: null,
+});
 const metrics: WorkerHealthMetrics = {
   jobFailureCount: 0,
   jobSuccessCount: 0,
@@ -120,8 +124,7 @@ startWorkerHealthServer({
   metrics: () => metrics,
   port: config.workerHealthPort,
   readiness: async () => {
-    const client = await worker.client;
-    await client.ping();
+    await healthRedis.ping();
 
     return worker.isRunning();
   },
