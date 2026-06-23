@@ -15,6 +15,7 @@
     "lint": "pnpm -r --if-present lint",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",
+    "production:check": "node scripts/production-check.mjs",
     "prisma:generate": "pnpm --filter @diffguard/database prisma:generate",
     "prisma:migrate": "pnpm --filter @diffguard/database prisma:migrate"
   },

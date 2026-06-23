@@ -1,0 +1,16 @@
+{
+  "cases": [
+    {
+      "category": "logic",
+      "diff": "diff --git a/src/user-card.tsx b/src/user-card.tsx\n@@ -12,7 +12,7 @@ export function UserCard({ user }: Props) {\n-  const displayName = user.name;\n+  const displayName = user.fullName;\n   return <span>{displayName}</span>;",
+      "expectedFindings": [],
+      "id": "production-check-false-positive-trap",
+      "language": "typescript",
+      "notes": "A deterministic production-check eval case that should pass without live model access because the safe result is silence.",
+      "repoRules": "Ignore formatting-only suggestions. Do not comment on naming or style unless there is a concrete bug.",
+      "severity": "low",
+      "shouldNotMention": ["rename", "formatting", "style-only"],
+      "title": "Production readiness false-positive trap"
+    }
+  ]
+}

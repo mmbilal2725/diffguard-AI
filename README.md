@@ -58,6 +58,28 @@ Current status: the platform foundations are implemented across the monorepo. Th
 
 Production-readiness status: this is ready for serious local testing and controlled beta deployments. The repo now includes signed GitHub webhook verification, duplicate delivery handling, short-lived GitHub App installation tokens, dashboard API authentication, CORS/origin controls, request rate limiting, Prisma persistence, and repo-wide verification coverage. It is not yet a fully hardened multi-tenant SaaS service: deployment automation, hosted auth/tenant management, observability, alerting, backup/restore procedures, and marketplace-grade installation flows are still roadmap items.
 
+## Production Readiness
+
+Use the production readiness gate before deploying to a real organization or
+expanding beyond a controlled beta repository:
+
+```bash
+pnpm production:check
+```
+
+The gate runs local automated checks for Prisma generation, lint, typecheck,
+tests, build, deterministic eval reporting with `--fail-on-regression`,
+production Docker image builds, and Prisma migration deployment when
+`DATABASE_URL` is configured. It writes eval artifacts under
+`artifacts/production-check/`.
+
+The full release checklist is in
+[docs/production-readiness-checklist.md](docs/production-readiness-checklist.md).
+It also covers required live checks such as GitHub webhook signature
+verification, duplicate delivery handling, worker processing, GitHub comment
+posting, dashboard auth, rate limiting, healthchecks, release tagging, and
+deployment documentation.
+
 ## Architecture
 
 ```mermaid
