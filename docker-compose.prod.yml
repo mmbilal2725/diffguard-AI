@@ -1,0 +1,130 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-diffguard}
+      POSTGRES_USER: ${POSTGRES_USER:-diffguard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - diffguard_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - diffguard_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-diffguard}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-diffguard}
+      REDIS_URL: redis://redis:6379
+      REVIEW_QUEUE_NAME: ${REVIEW_QUEUE_NAME:-diffguard-review-runs}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?set GITHUB_WEBHOOK_SECRET}
+      DIFFGUARD_DASHBOARD_API_KEY: ${DIFFGUARD_DASHBOARD_API_KEY:?set DIFFGUARD_DASHBOARD_API_KEY}
+      DIFFGUARD_ALLOWED_ORIGINS: ${DIFFGUARD_ALLOWED_ORIGINS:-http://localhost:3000}
+      DIFFGUARD_RATE_LIMIT_MAX_REQUESTS: ${DIFFGUARD_RATE_LIMIT_MAX_REQUESTS:-120}
+      DIFFGUARD_RATE_LIMIT_WINDOW_MS: ${DIFFGUARD_RATE_LIMIT_WINDOW_MS:-60000}
+    ports:
+      - "${DIFFGUARD_API_PORT:-3001}:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-diffguard}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-diffguard}
+      REDIS_URL: redis://redis:6379
+      REVIEW_QUEUE_NAME: ${REVIEW_QUEUE_NAME:-diffguard-review-runs}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:?set GITHUB_APP_ID}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:?set GITHUB_APP_PRIVATE_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+      OPENAI_RESOLUTION_MODEL: ${OPENAI_RESOLUTION_MODEL:-gpt-5.5}
+      DIFFGUARD_REVIEW_PASSES: ${DIFFGUARD_REVIEW_PASSES:-logic-bugs,security-bugs,regression-test-gaps}
+      DIFFGUARD_STATIC_CHECKS: ${DIFFGUARD_STATIC_CHECKS:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pnpm --filter @diffguard/worker exec node -e \"const Redis = require('ioredis'); const redis = new Redis(process.env.REDIS_URL || 'redis://redis:6379'); redis.ping().then(() => redis.quit()).then(() => process.exit(0)).catch(() => process.exit(1))\""
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      DIFFGUARD_API_BASE_URL: http://api:3001
+      DIFFGUARD_DASHBOARD_API_KEY: ${DIFFGUARD_DASHBOARD_API_KEY:?set DIFFGUARD_DASHBOARD_API_KEY}
+      DIFFGUARD_DEMO_MODE: ${DIFFGUARD_DEMO_MODE:-false}
+    ports:
+      - "${DIFFGUARD_WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  diffguard_postgres:
+  diffguard_redis:

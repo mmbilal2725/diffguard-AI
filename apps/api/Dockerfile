@@ -1,0 +1,30 @@
+FROM node:20-bookworm-slim AS base
+
+ENV PNPM_HOME="/pnpm"
+ENV PATH="$PNPM_HOME:$PATH"
+
+WORKDIR /app
+
+RUN corepack enable
+
+FROM base AS deps
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY apps ./apps
+COPY packages ./packages
+
+RUN pnpm install --frozen-lockfile --filter @diffguard/api...
+RUN DATABASE_URL=postgresql://diffguard@localhost:5432/diffguard pnpm --filter @diffguard/database exec prisma generate
+
+FROM base AS runner
+
+ENV NODE_ENV=production
+
+COPY --from=deps /app /app
+
+EXPOSE 3001
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || '3001') + '/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
+
+CMD ["pnpm", "--filter", "@diffguard/api", "exec", "tsx", "src/index.ts"]

@@ -85,6 +85,56 @@ describe("eval command", () => {
     expect(result.exitCode).toBe(0);
   });
 
+  it("loads eval cases from a JSON object with a cases array", async () => {
+    const evalCases = [createEvalCase("case-one")];
+    const calls: unknown[] = [];
+
+    await runEvalCommand(
+      {
+        cases: "cases.json",
+        failOnRegression: false,
+        model: "gpt-5.5",
+        output: "markdown",
+        promptVersion: "review-v2",
+      },
+      {
+        formatEvalReport: () => "",
+        readFile: async () => JSON.stringify({ cases: evalCases }),
+        runEvalSuite: async (input) => {
+          calls.push(input);
+
+          return createEvalReport({ passed: true });
+        },
+      },
+    );
+
+    expect(calls).toEqual([
+      {
+        cases: evalCases,
+        modelVersion: "gpt-5.5",
+        promptVersion: "review-v2",
+      },
+    ]);
+  });
+
+  it("does not fail a regression run unless fail-on-regression is requested", async () => {
+    const result = await runEvalCommand(
+      {
+        failOnRegression: false,
+        model: "gpt-5.5",
+        output: "json",
+        promptVersion: "review-v2",
+      },
+      {
+        formatEvalReport: () => "{}",
+        runEvalSuite: async () => createEvalReport({ passed: false }),
+      },
+    );
+
+    expect(result.output).toBe("{}");
+    expect(result.exitCode).toBe(0);
+  });
+
   it("sets a non-zero exit code for regressions when requested", async () => {
     const result = await runEvalCommand(
       {

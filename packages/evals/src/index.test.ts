@@ -10,8 +10,8 @@ import {
 } from "./index.js";
 
 describe("starterTypeScriptEvalCases", () => {
-  it("includes 10 validated TypeScript bug cases", () => {
-    expect(starterTypeScriptEvalCases).toHaveLength(10);
+  it("includes validated TypeScript bug cases and a false-positive trap", () => {
+    expect(starterTypeScriptEvalCases).toHaveLength(11);
 
     const parsed = starterTypeScriptEvalCases.map((evalCase) => EvalCaseSchema.parse(evalCase));
 
@@ -26,9 +26,29 @@ describe("starterTypeScriptEvalCases", () => {
       "ts-race-condition",
       "ts-insecure-logging",
       "ts-missing-test-for-changed-behavior",
+      "ts-false-positive-style-only-trap",
     ]);
     expect(parsed.every((evalCase) => evalCase.language === "typescript")).toBe(true);
-    expect(parsed.every((evalCase) => evalCase.expectedFindings.length > 0)).toBe(true);
+    expect(
+      parsed.some(
+        (evalCase) => evalCase.category === "logic" && evalCase.expectedFindings.length > 0,
+      ),
+    ).toBe(true);
+    expect(
+      parsed.some(
+        (evalCase) => evalCase.category === "security" && evalCase.expectedFindings.length > 0,
+      ),
+    ).toBe(true);
+    expect(parsed.some((evalCase) => evalCase.category === "testing")).toBe(true);
+
+    const falsePositiveTrap = parsed.find(
+      (evalCase) => evalCase.id === "ts-false-positive-style-only-trap",
+    );
+    expect(falsePositiveTrap).toMatchObject({
+      category: "logic",
+      expectedFindings: [],
+      shouldNotMention: ["rename", "formatting", "style-only"],
+    });
   });
 });
 

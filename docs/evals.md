@@ -1,6 +1,7 @@
 # DiffGuard-AI Evals
 
-`packages/evals` defines PR-diff eval cases, starter TypeScript bug cases, and a CI-friendly eval runner.
+`packages/evals` defines PR-diff eval cases, starter TypeScript bug cases, a
+false-positive trap, and a CI-friendly eval runner.
 
 ## Eval Case Format
 
@@ -36,7 +37,7 @@ Eval cases are validated with Zod and can be stored as either a JSON array or an
 
 ## Starter Cases
 
-The package includes 10 TypeScript starter cases:
+The package includes 11 TypeScript starter cases:
 
 - missing authorization check
 - missing null check
@@ -48,6 +49,7 @@ The package includes 10 TypeScript starter cases:
 - race condition
 - insecure logging
 - missing test for changed behavior
+- false-positive trap for a benign style-only rename
 
 ## Metrics
 
@@ -60,7 +62,9 @@ The eval report includes:
 - findings per PR
 - prompt version and model version
 
-`shouldNotMention` phrases are treated as false positives because DiffGuard-AI should avoid noisy comments such as style-only suggestions.
+Cases with no `expectedFindings` are quiet cases. They pass only when the
+reviewer stays silent. `shouldNotMention` phrases are treated as false positives
+because DiffGuard-AI should avoid noisy comments such as style-only suggestions.
 
 ## CLI
 
@@ -78,4 +82,15 @@ diffguard-ai eval run --cases eval-cases.json --model gpt-5.5 --prompt-version r
 
 The command always prints the report. With `--fail-on-regression`, it exits with code `1` when any false positive or false negative is present.
 
-When `DATABASE_URL` is configured, `diffguard-ai eval run` also stores an eval run summary in Prisma. The dashboard API exposes those rows from `GET /dashboard/evals`, and the web dashboard shows the latest persisted eval summaries. If `DATABASE_URL` is not set, eval persistence is skipped and the command still prints the report normally.
+Without `--fail-on-regression`, regressions are still shown in the report but the
+command exits with code `0`. Use the flag in CI jobs that should block on eval
+misses or noisy comments.
+
+When `DATABASE_URL` is configured, `diffguard-ai eval run` also stores an eval
+run summary in Prisma. The persisted summary includes precision, recall, false
+positive count, false negative count, validator rejection rate, cost, latency,
+findings per PR, prompt version, model version, and pass/fail status. The
+dashboard API exposes those rows from `GET /dashboard/evals`, and the web
+dashboard shows the latest persisted eval summaries. If `DATABASE_URL` is not
+set, eval persistence is skipped and the command still prints the report
+normally.

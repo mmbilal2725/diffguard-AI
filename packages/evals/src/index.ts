@@ -391,6 +391,26 @@ export const starterTypeScriptEvalCases: EvalCase[] = [
     shouldNotMention: ["coverage percentage"],
     title: "Missing test for changed behavior",
   },
+  {
+    category: "logic",
+    diff: [
+      "diff --git a/src/user-card.tsx b/src/user-card.tsx",
+      "@@ -12,7 +12,7 @@ export function UserCard({ user }: Props) {",
+      "-  const displayName = user.name;",
+      "+  const displayName = user.fullName;",
+      "   return <span>{displayName}</span>;",
+    ].join("\n"),
+    expectedFindings: [],
+    id: "ts-false-positive-style-only-trap",
+    language: "typescript",
+    notes:
+      "The diff is a benign field rename with no evidence of broken behavior; useful reviewers should stay silent.",
+    repoRules:
+      "Ignore formatting-only suggestions. Do not comment on naming or style unless there is a concrete bug.",
+    severity: "low",
+    shouldNotMention: ["rename", "formatting", "style-only"],
+    title: "False-positive trap for style-only comments",
+  },
 ];
 
 export async function runEvalSuite(input: EvalSuiteInput): Promise<EvalReport> {
