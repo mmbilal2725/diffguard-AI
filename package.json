@@ -11,6 +11,7 @@
   },
   "scripts": {
     "dev": "pnpm --parallel --filter @diffguard/web --filter @diffguard/api --filter @diffguard/worker dev",
+    "build": "pnpm --filter @diffguard/web build",
     "lint": "pnpm -r --if-present lint",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",

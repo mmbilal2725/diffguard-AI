@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Lint, typecheck, test, build, and eval
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      CI: "true"
+      DATABASE_URL: postgresql://diffguard:diffguard@localhost:5432/diffguard
+      DIFFGUARD_DEMO_MODE: "true"
+      OPENAI_API_KEY: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm prisma:generate
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+        env:
+          OPENAI_API_KEY: ""
+
+      - name: Build
+        run: pnpm build
+
+      - name: Run deterministic eval suite
+        run: |
+          mkdir -p artifacts
+          pnpm --silent --filter @diffguard/cli start -- eval run \
+            --model ci-mock \
+            --prompt-version ci-mock \
+            --output json \
+            > artifacts/eval-report.json
+        env:
+          OPENAI_API_KEY: ""
+
+      - name: Upload test and eval artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-artifacts
+          if-no-files-found: ignore
+          path: |
+            artifacts/**
+            coverage/**
+            test-results/**
+            **/coverage/**
+            **/test-results/**
