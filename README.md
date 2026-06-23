@@ -272,15 +272,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run DiffGuard-AI
+        # Pin an immutable release tag. Replace v0.1.0 with the latest release.
         uses: diffguard-ai/diffguard-ai@v0.1.0
         with:
           min-confidence: "0.85"
           max-findings: "5"
+          review-passes: logic-bugs,security-bugs,regression-test-gaps
           output: markdown
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          DIFFGUARD_REVIEW_PASSES: logic-bugs,security-bugs,regression-test-gaps
 ```
 
 For local action development from this checkout, point `uses:` at the local action path instead. See [docs/github-action.md](docs/github-action.md).

@@ -12,7 +12,7 @@ inputs:
     description: Pull request number. Defaults to github.event.pull_request.number.
     required: false
   github-token:
-    description: GitHub token with pull-requests:write permission. Defaults to GITHUB_TOKEN from the workflow environment.
+    description: GitHub token with pull-requests:write permission. Defaults to github.token.
     required: false
   dry-run:
     description: Run the review without posting a pull request comment.
@@ -28,6 +28,9 @@ inputs:
   model:
     description: Model name to use for the review pipeline.
     required: false
+  review-passes:
+    description: Comma-separated review pass ids, such as logic-bugs,security-bugs,regression-test-gaps.
+    required: false
   output:
     description: CLI output format, either markdown or json.
     required: false
@@ -36,6 +39,11 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Setup Node.js 20
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
     - name: Install DiffGuard-AI dependencies
       shell: bash
       run: |
@@ -45,14 +53,16 @@ runs:
     - name: Run DiffGuard-AI review
       shell: bash
       env:
+        GITHUB_TOKEN: ${{ inputs.github-token || github.token }}
+        OPENAI_API_KEY: ${{ env.OPENAI_API_KEY }}
         DIFFGUARD_INPUT_OWNER: ${{ inputs.owner }}
         DIFFGUARD_INPUT_REPO: ${{ inputs.repo }}
         DIFFGUARD_INPUT_PULL_NUMBER: ${{ inputs.pull-number }}
-        DIFFGUARD_INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
         DIFFGUARD_INPUT_DRY_RUN: ${{ inputs.dry-run }}
         DIFFGUARD_INPUT_MIN_CONFIDENCE: ${{ inputs.min-confidence }}
         DIFFGUARD_INPUT_MAX_FINDINGS: ${{ inputs.max-findings }}
         DIFFGUARD_INPUT_MODEL: ${{ inputs.model }}
+        DIFFGUARD_INPUT_REVIEW_PASSES: ${{ inputs.review-passes }}
         DIFFGUARD_INPUT_OUTPUT: ${{ inputs.output }}
         DIFFGUARD_EVENT_PULL_NUMBER: ${{ github.event.pull_request.number }}
         DIFFGUARD_REPOSITORY: ${{ github.repository }}
@@ -75,8 +85,8 @@ runs:
           --output "$DIFFGUARD_INPUT_OUTPUT"
         )
 
-        if [ -n "$DIFFGUARD_INPUT_GITHUB_TOKEN" ]; then
-          args+=(--github-token "$DIFFGUARD_INPUT_GITHUB_TOKEN")
+        if [ -n "$GITHUB_TOKEN" ]; then
+          args+=(--github-token "$GITHUB_TOKEN")
         fi
 
         if [ "$DIFFGUARD_INPUT_DRY_RUN" = "true" ]; then
@@ -89,6 +99,10 @@ runs:
 
         if [ -n "$DIFFGUARD_INPUT_MODEL" ]; then
           args+=(--model "$DIFFGUARD_INPUT_MODEL")
+        fi
+
+        if [ -n "$DIFFGUARD_INPUT_REVIEW_PASSES" ]; then
+          args+=(--review-passes "$DIFFGUARD_INPUT_REVIEW_PASSES")
         fi
 
         pnpm --dir "$GITHUB_ACTION_PATH" --filter @diffguard/cli start -- "${args[@]}"
